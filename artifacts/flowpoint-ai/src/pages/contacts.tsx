@@ -47,7 +47,7 @@ import {
   type ContactPropertyRelationshipHistory,
   type RelationshipType,
 } from '@/lib/contactsTypes';
-import type { Service, ServiceContactRelationship } from '@/lib/servicesTypes';
+import { serviceBillingPeriodLabel, serviceContractStatusLabel, type Service, type ServiceContactRelationship, type ServiceContract } from '@/lib/servicesTypes';
 import { pushSingleNotification } from '@/lib/notificationHelpers';
 import { ageLabel, requestPriorityLabel, requestStatusLabel, type RequestRecord } from '@/lib/requestsTypes';
 import { useLocation } from 'wouter';
@@ -371,6 +371,7 @@ function ContactCard({
   properties,
   units,
   serviceRelationships,
+  serviceContracts,
   services,
   onOpen,
   onEdit,
@@ -382,6 +383,7 @@ function ContactCard({
   properties: Property[];
   units: Unit[];
   serviceRelationships: ServiceContactRelationship[];
+  serviceContracts: ServiceContract[];
   services: Service[];
   onOpen: () => void;
   onEdit: () => void;
@@ -392,6 +394,7 @@ function ContactCard({
   const ownerRelationships = linked.filter((item) => item.relationship_type === 'owner');
   const relationshipSummaries = contactRelationshipSummaries(contact, relationships, properties, units);
   const linkedServices = serviceRelationships.filter((item) => String(item.contact_id) === String(contact.id));
+  const linkedContracts = serviceContracts.filter((item) => String(item.contact_id) === String(contact.id));
   return (
     <motion.button
       layout
@@ -424,7 +427,7 @@ function ContactCard({
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-[#f0eeeb] pt-3 text-[10px] text-[#aaa59d]">
             <span className="flex items-center gap-1"><MessageSquare size={10} />{contact.last_contacted_at ? `Last contact ${new Date(contact.last_contacted_at).toLocaleDateString()}` : 'No communication yet'}</span>
-            <span>Services: {linkedServices.length ? linkedServices.slice(0, 2).map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? 'Service').join(', ') : 'none linked'}</span>
+            <span>Services: {linkedContracts.length || linkedServices.length ? [...linkedContracts.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? 'Service'), ...linkedServices.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? 'Service')].slice(0, 2).join(', ') : 'none linked'}</span>
             <span>Open issues: 0</span>
             <span>{contact.internal_notes || contact.notes ? 'Has notes' : 'No notes'}</span>
           </div>
@@ -530,6 +533,8 @@ function ContactProfile({
   properties,
   units,
   serviceRelationships,
+  serviceContracts,
+  serviceContractError,
   services,
   onClose,
   onEdit,
@@ -543,6 +548,8 @@ function ContactProfile({
   properties: Property[];
   units: Unit[];
   serviceRelationships: ServiceContactRelationship[];
+  serviceContracts: ServiceContract[];
+  serviceContractError: string | null;
   services: Service[];
   onClose: () => void;
   onEdit: () => void;
@@ -586,7 +593,7 @@ function ContactProfile({
     <div className="max-h-[calc(92vh-138px)] overflow-y-auto px-5 py-5">
       {tab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Identity</p><Detail label="Contact type" value={contactTypeLabel(contact.contact_type)} /><Detail label="Status" value={contactStatusLabel(contact.status)} /><Detail label="Customer ID" value={contact.customer_id ?? 'Pending'} /><Detail label="Company" value={contact.company_name ?? contact.business_name} /></div><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Communication</p><Detail label="Email" value={contact.email} /><Detail label="Phone" value={contact.phone} /><Detail label="Alternate phone" value={contact.alternate_phone} /><Detail label="Preferred channel" value={channelLabel(contact.preferred_channel)} /></div><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4 md:col-span-2"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Address and context</p><Detail label="Address" value={[contact.address, contact.city, contact.state, contact.zip_code, contact.country].filter(Boolean).join(', ')} /><Detail label="AI summary" value={contact.ai_summary} /><Detail label="Internal notes" value={contact.internal_notes ?? contact.notes} /></div></div>}
        {tab === 'relationships' && <RelationshipPanel contact={contact} relationships={relationships} relationshipHistory={relationshipHistory} properties={properties} units={units} onAdd={onAddRelationship} onRemove={onRemoveRelationship} />}
-       {tab === 'services' && <ContactServices contact={contact} serviceRelationships={serviceRelationships} services={services} />}
+        {tab === 'services' && <ContactServices contact={contact} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} serviceContractError={serviceContractError} services={services} />}
        {tab === 'issues' && <div>
          {issuesLoading && <div className="flex items-center justify-center py-10 text-[11px] text-[#8e8981]"><Loader2 size={14} className="mr-2 animate-spin" />Loading requests…</div>}
          {!issuesLoading && issues.length === 0 && <EmptyState icon={AlertCircle} title="No requests or issues yet" description="Requests linked to this contact will appear here from the Requests / Issues workspace." />}
@@ -598,10 +605,20 @@ function ContactProfile({
   </Modal>;
 }
 
-function ContactServices({ contact, serviceRelationships, services }: { contact: Contact; serviceRelationships: ServiceContactRelationship[]; services: Service[] }) {
+function ContactServices({ contact, serviceRelationships, serviceContracts, serviceContractError, services }: { contact: Contact; serviceRelationships: ServiceContactRelationship[]; serviceContracts: ServiceContract[]; serviceContractError: string | null; services: Service[] }) {
   const linked = serviceRelationships.filter((item) => String(item.contact_id) === String(contact.id));
-  if (!linked.length) return <EmptyState icon={BriefcaseIcon} title="No services linked" description="This contact does not have any service relationships yet. Add the relationship from the Services page." />;
-  return <div className="space-y-2">{linked.map((relationship) => {
+  const contracts = serviceContracts.filter((item) => String(item.contact_id) === String(contact.id));
+  if (!linked.length && !contracts.length) return serviceContractError
+    ? <div className="space-y-3"><InlineError message={`Service contracts are unavailable until supabase/service-contracts-migration.sql is applied. ${serviceContractError}`} /><EmptyState icon={BriefcaseIcon} title="No service contracts yet" description="Create a contract for this contact from the Services page." /></div>
+    : <EmptyState icon={BriefcaseIcon} title="No service contracts yet" description="Create a contract for this contact from the Services page." />;
+  return <div className="space-y-2">
+    {contracts.map((contract) => {
+      const service = contract.service ?? services.find((item) => item.id === contract.service_id);
+      const amount = Number(contract.price_amount);
+      const price = `${contract.currency_code} ${Number.isFinite(amount) ? amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : contract.price_amount}`;
+      return <div key={`contract-${contract.id}`} className="rounded-[11px] border border-[#e9e6e1] bg-white p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-[12px] font-semibold text-[#35322e]">{service?.name ?? 'Service unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{service?.category ?? 'Category unavailable'} · {price} / {serviceBillingPeriodLabel(contract.billing_period)}</p></div><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${contract.status === 'active' ? 'border-[#d2ead7] bg-[#f2faf3] text-[#327443]' : 'border-[#e1dfda] bg-[#f1f0ee] text-[#77736d]'}`}>{serviceContractStatusLabel(contract.status)}</span></div><p className="mt-2 text-[10px] text-[#8e8981]">{contract.start_date || 'Start date unavailable'} → {contract.end_date || 'Ongoing'}</p>{contract.notes && <p className="mt-2 text-[11px] leading-[1.5] text-[#77736d]">{contract.notes}</p>}</div>;
+    })}
+    {linked.map((relationship) => {
     const service = relationship.service ?? services.find((item) => item.id === relationship.service_id);
     return <div key={String(relationship.id)} className="rounded-[11px] border border-[#e9e6e1] bg-white p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-[12px] font-semibold text-[#35322e]">{service?.name ?? 'Service unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{service?.category ?? 'Category unavailable'}</p></div><span className="rounded-full border border-[#d2ead7] bg-[#f2faf3] px-2 py-0.5 text-[10px] font-semibold text-[#327443]">{relationship.relationship_status ?? 'Active'}</span></div>{relationship.notes && <p className="mt-2 text-[11px] leading-[1.5] text-[#77736d]">{relationship.notes}</p>}</div>;
   })}</div>;
@@ -616,7 +633,7 @@ function Detail({ label, value }: { label: string; value: string | null | undefi
 }
 
 function ConfirmDelete({ name, deleting, onCancel, onConfirm }: { name: string; deleting: boolean; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="fixed inset-0 z-[70] flex items-center justify-center p-4"><motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={deleting ? undefined : onCancel} className="absolute inset-0 bg-[#171511]/30 backdrop-blur-[2px]" /><motion.div initial={{ opacity: 0, y: 8, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="relative w-full max-w-[380px] rounded-[16px] border border-[#e4e2de] bg-[#fbfaf8] p-6 text-center shadow-[0_24px_80px_rgba(25,22,18,.18)]"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#f0cbc6] bg-[#fff3f1] text-[#b33d32]"><Trash2 size={17} /></div><h2 className="mt-4 text-[15px] font-semibold text-[#24211e]">Delete {name}?</h2><p className="mt-1 text-[12px] leading-[1.5] text-[#8f8980]">This removes the contact and its property relationships.</p><div className="mt-5 flex gap-2"><button onClick={onCancel} disabled={deleting} className="h-9 flex-1 rounded-[9px] border border-[#e4e2de] text-[12px] font-medium text-[#625e57] hover:bg-[#f0eeea] disabled:opacity-50">Cancel</button><button onClick={onConfirm} disabled={deleting} className="flex h-9 flex-1 items-center justify-center gap-2 rounded-[9px] bg-[#b33d32] text-[12px] font-semibold text-white hover:bg-[#96342b] disabled:opacity-50">{deleting && <Loader2 size={13} className="animate-spin" />}Delete</button></div></motion.div></div>;
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center p-4"><motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={deleting ? undefined : onCancel} className="absolute inset-0 bg-[#171511]/30 backdrop-blur-[2px]" /><motion.div initial={{ opacity: 0, y: 8, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="relative w-full max-w-[380px] rounded-[16px] border border-[#e4e2de] bg-[#fbfaf8] p-6 text-center shadow-[0_24px_80px_rgba(25,22,18,.18)]"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#f0cbc6] bg-[#fff3f1] text-[#b33d32]"><Trash2 size={17} /></div><h2 className="mt-4 text-[15px] font-semibold text-[#24211e]">Delete {name}?</h2><p className="mt-1 text-[12px] leading-[1.5] text-[#8f8980]">This removes the contact and its property relationships. Existing service contracts must be deleted first.</p><div className="mt-5 flex gap-2"><button onClick={onCancel} disabled={deleting} className="h-9 flex-1 rounded-[9px] border border-[#e4e2de] text-[12px] font-medium text-[#625e57] hover:bg-[#f0eeea] disabled:opacity-50">Cancel</button><button onClick={onConfirm} disabled={deleting} className="flex h-9 flex-1 items-center justify-center gap-2 rounded-[9px] bg-[#b33d32] text-[12px] font-semibold text-white hover:bg-[#96342b] disabled:opacity-50">{deleting && <Loader2 size={13} className="animate-spin" />}Delete</button></div></motion.div></div>;
 }
 
 export default function ContactsPage() {
@@ -626,6 +643,8 @@ export default function ContactsPage() {
   const [relationshipHistory, setRelationshipHistory] = useState<ContactPropertyRelationshipHistory[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [serviceRelationships, setServiceRelationships] = useState<ServiceContactRelationship[]>([]);
+  const [serviceContracts, setServiceContracts] = useState<ServiceContract[]>([]);
+  const [serviceContractError, setServiceContractError] = useState<string | null>(null);
   const [properties, setProperties] = useState<Property[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   const [loading, setLoading] = useState(true);
@@ -650,7 +669,7 @@ export default function ContactsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [contactsResult, relationshipsResult, historyResult, propertiesResult, unitsResult, servicesResult, serviceRelationshipsResult] = await Promise.all([
+    const [contactsResult, relationshipsResult, historyResult, propertiesResult, unitsResult, servicesResult, serviceRelationshipsResult, serviceContractsResult] = await Promise.all([
       supabase.from('contacts').select('*').order('name'),
       supabase.from('contact_property_relationships').select('id, company_id, contact_id, property_id, unit_id, relationship_type, start_date, end_date, notes, ownership_percentage, ownership_scope, property:properties(id, name, address_line1, city), unit:units(id, unit_number, property_id)'),
       supabase.from('contact_property_relationship_history').select('*').order('archived_at', { ascending: false }),
@@ -658,6 +677,7 @@ export default function ContactsPage() {
       supabase.from('units').select('*').order('unit_number'),
       supabase.from('services').select('*').order('name'),
       supabase.from('contact_services').select('id, company_id, service_id, contact_id, relationship_status, notes, service:services(id, name, category, status)'),
+      supabase.from('service_contracts').select('*, service:services(id, name, category, status)').order('created_at', { ascending: false }),
     ]);
     if (contactsResult.error) setError(contactsResult.error.message);
     else setContacts((contactsResult.data as Contact[]) ?? []);
@@ -682,6 +702,13 @@ export default function ContactsPage() {
       setServiceRelationships([]);
     } else {
       setServiceRelationships((serviceRelationshipsResult.data as unknown as ServiceContactRelationship[]) ?? []);
+    }
+    if (serviceContractsResult.error) {
+      setServiceContracts([]);
+      setServiceContractError(serviceContractsResult.error.message);
+    } else {
+      setServiceContracts((serviceContractsResult.data as unknown as ServiceContract[]) ?? []);
+      setServiceContractError(null);
     }
     setLoading(false);
   }, []);
@@ -757,7 +784,11 @@ export default function ContactsPage() {
       const linkedPropertyNames = linked.map((item) => item.property?.name ?? properties.find((property) => property.id === item.property_id)?.name ?? '').join(' ');
        const linkedUnitNumbers = linked.map((item) => item.unit?.unit_number ?? units.find((unit) => unit.id === item.unit_id)?.unit_number ?? '').join(' ');
        const linkedServices = serviceRelationships.filter((item) => String(item.contact_id) === String(contact.id));
-       const linkedServiceNames = linkedServices.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? '').join(' ');
+        const linkedContracts = serviceContracts.filter((item) => String(item.contact_id) === String(contact.id));
+        const linkedServiceNames = [
+          ...linkedContracts.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? ''),
+          ...linkedServices.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? ''),
+        ].join(' ');
        const haystack = [contact.name, contact.email, contact.phone, contact.customer_id, contact.company_name, contact.business_name, linkedPropertyNames, linkedUnitNumbers, linkedServiceNames].filter(Boolean).join(' ').toLowerCase();
       const lastContact = contact.last_contacted_at ? new Date(contact.last_contacted_at).getTime() : null;
       const matchesLastContact = !lastContactFilter || (lastContactFilter === 'never' ? !lastContact : lastContactFilter === 'older' ? Boolean(lastContact && now - lastContact > 30 * 86400000) : Boolean(lastContact && now - lastContact <= Number(lastContactFilter) * 86400000));
@@ -766,11 +797,11 @@ export default function ContactsPage() {
         (!statusFilter || contact.status === statusFilter) &&
         (!propertyFilter || linkedPropertyIds.includes(propertyFilter)) &&
         (!unitFilter || linkedUnitIds.includes(unitFilter)) &&
-         (!serviceFilter || (serviceFilter === 'none' ? linkedServices.length === 0 : linkedServices.some((item) => item.service_id === serviceFilter))) &&
+          (!serviceFilter || (serviceFilter === 'none' ? linkedServices.length === 0 && linkedContracts.length === 0 : linkedServices.some((item) => item.service_id === serviceFilter) || linkedContracts.some((item) => item.service_id === serviceFilter))) &&
         (!issuesFilter || issuesFilter === 'none') &&
         matchesLastContact;
     }).sort((a, b) => a.name.localeCompare(b.name));
-  }, [contacts, relationships, properties, units, services, serviceRelationships, search, typeFilter, statusFilter, propertyFilter, unitFilter, serviceFilter, lastContactFilter, issuesFilter]);
+  }, [contacts, relationships, properties, units, services, serviceRelationships, serviceContracts, search, typeFilter, statusFilter, propertyFilter, unitFilter, serviceFilter, lastContactFilter, issuesFilter]);
 
   const clearFilters = () => { setSearch(''); setTypeFilter(''); setStatusFilter(''); setPropertyFilter(''); setUnitFilter(''); setServiceFilter(''); setLastContactFilter(''); setIssuesFilter(''); };
 
@@ -797,11 +828,11 @@ export default function ContactsPage() {
       {loading && <LoadingState />}
       {!loading && error && <div className="mt-5"><InlineError message={error} /></div>}
        {!loading && !error && filtered.length === 0 && <div className="mt-5"><EmptyState icon={Users2} title={search || typeFilter || statusFilter || propertyFilter || unitFilter || serviceFilter || lastContactFilter || issuesFilter ? 'No matching contacts' : 'No contacts yet'} description={search || typeFilter || statusFilter || propertyFilter || unitFilter || serviceFilter || lastContactFilter || issuesFilter ? 'Try a different search or reset the filters.' : 'Add the first contact to give your team a shared identity and relationship record.'} /></div>}
-        {!loading && !error && filtered.length > 0 && <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"><AnimatePresence mode="popLayout">{filtered.map((contact) => <ContactCard key={contact.id} contact={contact} relationships={relationships} properties={properties} units={units} serviceRelationships={serviceRelationships} services={services} onOpen={() => setProfileContact(contact)} onEdit={() => setFormContact(contact)} onDelete={() => setDeleteContact(contact)} onNotes={() => setNotesContact(contact)} />)}</AnimatePresence></div>}
+         {!loading && !error && filtered.length > 0 && <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"><AnimatePresence mode="popLayout">{filtered.map((contact) => <ContactCard key={contact.id} contact={contact} relationships={relationships} properties={properties} units={units} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} services={services} onOpen={() => setProfileContact(contact)} onEdit={() => setFormContact(contact)} onDelete={() => setDeleteContact(contact)} onNotes={() => setNotesContact(contact)} />)}</AnimatePresence></div>}
     </div></div>
     <AnimatePresence>{formContact !== undefined && <ContactForm contact={formContact} onSave={saveContact} onClose={() => setFormContact(undefined)} />}</AnimatePresence>
-     <AnimatePresence>{profileContact && <ContactProfile contact={profileContact} relationships={relationships} relationshipHistory={relationshipHistory} properties={properties} units={units} serviceRelationships={serviceRelationships} services={services} onClose={() => setProfileContact(null)} onEdit={() => setFormContact(profileContact)} onAddRelationship={addRelationship} onRemoveRelationship={removeRelationship} onSaveNotes={(notes) => saveNotes(profileContact, notes)} />}</AnimatePresence>
-     <AnimatePresence>{notesContact && <ContactProfile contact={notesContact} relationships={relationships} relationshipHistory={relationshipHistory} properties={properties} units={units} serviceRelationships={serviceRelationships} services={services} onClose={() => setNotesContact(null)} onEdit={() => setFormContact(notesContact)} onAddRelationship={addRelationship} onRemoveRelationship={removeRelationship} onSaveNotes={(notes) => saveNotes(notesContact, notes)} />}</AnimatePresence>
+      <AnimatePresence>{profileContact && <ContactProfile contact={profileContact} relationships={relationships} relationshipHistory={relationshipHistory} properties={properties} units={units} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} serviceContractError={serviceContractError} services={services} onClose={() => setProfileContact(null)} onEdit={() => setFormContact(profileContact)} onAddRelationship={addRelationship} onRemoveRelationship={removeRelationship} onSaveNotes={(notes) => saveNotes(profileContact, notes)} />}</AnimatePresence>
+      <AnimatePresence>{notesContact && <ContactProfile contact={notesContact} relationships={relationships} relationshipHistory={relationshipHistory} properties={properties} units={units} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} serviceContractError={serviceContractError} services={services} onClose={() => setNotesContact(null)} onEdit={() => setFormContact(notesContact)} onAddRelationship={addRelationship} onRemoveRelationship={removeRelationship} onSaveNotes={(notes) => saveNotes(notesContact, notes)} />}</AnimatePresence>
     <AnimatePresence>{deleteContact && <ConfirmDelete name={deleteContact.name} deleting={deleting} onCancel={() => setDeleteContact(null)} onConfirm={deleteSelectedContact} />}</AnimatePresence>
   </div></AppLayout>;
 }

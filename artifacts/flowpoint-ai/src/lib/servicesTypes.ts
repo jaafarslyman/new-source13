@@ -1,4 +1,6 @@
 export type ServiceStatus = 'active' | 'inactive';
+export type ServiceContractStatus = 'active' | 'pending' | 'completed' | 'cancelled';
+export type ServiceBillingPeriod = 'one_time' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
 
 export interface Service {
   id: string;
@@ -22,6 +24,94 @@ export interface Service {
 }
 
 export type ServiceDraft = Omit<Service, 'id' | 'company_id' | 'created_at' | 'updated_at'>;
+
+export interface ServiceContract {
+  id: string;
+  company_id: string | null;
+  created_at: string;
+  updated_at: string;
+  contact_id: number | string;
+  service_id: string;
+  price_amount: number | string;
+  currency_code: string;
+  billing_period: ServiceBillingPeriod;
+  start_date: string;
+  end_date: string | null;
+  status: ServiceContractStatus;
+  notes: string | null;
+  contact?: {
+    id: number | string;
+    name: string;
+    customer_id: string | null;
+    contact_type: string | null;
+    email: string | null;
+    phone: string | null;
+  } | null;
+  service?: {
+    id: string;
+    name: string;
+    category: string;
+    status: ServiceStatus;
+  } | null;
+}
+
+export interface ServiceContractDraft {
+  contact_id: number | string;
+  service_id: string;
+  price_amount: number;
+  currency_code: string;
+  billing_period: ServiceBillingPeriod;
+  start_date: string;
+  end_date: string | null;
+  status: ServiceContractStatus;
+  notes: string | null;
+}
+
+export const SERVICE_CATEGORIES = [
+  'Property and asset management',
+  'Leasing and tenant placement',
+  'Tenant and resident relations',
+  'Rent collection and financial management',
+  'Lease administration',
+  'Property marketing',
+  'Maintenance and repairs',
+  'Preventive maintenance',
+  'Cleaning and janitorial',
+  'Landscaping and groundskeeping',
+  'Security and access control',
+  'Utilities and energy management',
+  'Inspections and compliance',
+  'Accounting and owner reporting',
+  'Vendor and contractor coordination',
+  'HOA and community association management',
+  'Move-in and move-out coordination',
+  'Emergency and after-hours response',
+  'Renovation and capital projects',
+  'Other',
+] as const;
+
+export const SERVICE_CONTRACT_STATUSES = [
+  { value: 'active', label: 'Active' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+] as const;
+
+export const SERVICE_BILLING_PERIODS = [
+  { value: 'one_time', label: 'One-time' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'quarterly', label: 'Quarterly' },
+  { value: 'annually', label: 'Annually' },
+] as const;
+
+export function serviceContractStatusLabel(value: string | null | undefined) {
+  return SERVICE_CONTRACT_STATUSES.find((item) => item.value === value)?.label ?? 'Active';
+}
+
+export function serviceBillingPeriodLabel(value: string | null | undefined) {
+  return SERVICE_BILLING_PERIODS.find((item) => item.value === value)?.label ?? 'Monthly';
+}
 
 export interface ServiceContactRelationship {
   id: string | number;

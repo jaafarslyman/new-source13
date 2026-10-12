@@ -25,6 +25,8 @@ Run `supabase/property-rebuild.sql` after confirming `public.contacts` exists wi
 
 The property RLS policies scope reads and writes to the signed-in Supabase user (`company_id = auth.uid()`). The rebuild script also permits `company` as a contact type for company owners. Other feature migrations are separate and are not run automatically by the app; review them against your current schema before applying.
 
+After `services-migration.sql`, run `service-contracts-migration.sql` to add customer-specific agreements for catalog services. This additive migration creates `service_contracts` with the customer, service, agreed amount/currency, billing frequency, start/end dates, status, notes, and company-scoped RLS. It does not change or delete existing service or contact relationship rows. Service and contact records referenced by a contract cannot be deleted until the contract is removed.
+
 ## Commercial property subtypes
 
 After the existing property and unit tables are set up, run `commercial-properties-migration.sql` to add office, retail, hospitality, and mixed-use fields. This migration preserves existing records. Its updated check constraints are added `NOT VALID` so older rows do not block the migration; new and updated rows must satisfy them. Do not rerun `property-rebuild.sql` just to add commercial support because that script clears property and unit data.
