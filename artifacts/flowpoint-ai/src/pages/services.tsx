@@ -39,6 +39,7 @@ import {
   serviceContractStatusLabel,
   serviceBillingPeriodLabel,
   type Service,
+  type ServiceCategoryDetails,
   type ServiceContract,
   type ServiceContractStatus,
   type ServiceContactRelationship,
@@ -53,6 +54,18 @@ const inputClass =
   'w-full h-[39px] rounded-[9px] border border-[#e4e2de] bg-white px-[11px] text-[13px] text-[#151412] outline-none placeholder:text-[#b3b0aa] focus:border-[#151412] focus:ring-2 focus:ring-[#151412]/8 transition-all';
 const textAreaClass =
   'w-full rounded-[9px] border border-[#e4e2de] bg-white px-[11px] py-[9px] text-[13px] leading-[1.5] text-[#151412] outline-none placeholder:text-[#b3b0aa] focus:border-[#151412] focus:ring-2 focus:ring-[#151412]/8 transition-all resize-none';
+
+function isMissingCategoryDetailsColumn(message: string | undefined | null) {
+  const normalized = message?.toLowerCase() ?? '';
+  return normalized.includes('category_details')
+    && /(does not exist|could not find|schema cache|column)/.test(normalized);
+}
+
+function serviceSaveErrorMessage(message: string) {
+  return isMissingCategoryDetailsColumn(message)
+    ? 'Category-specific settings need the Supabase migration. Apply supabase/service-category-details-migration.sql, then try again.'
+    : message;
+}
 
 type RelationshipState = {
   contacts: ServiceContactRelationship[];
@@ -349,6 +362,216 @@ function categoryGuidance(category: string) {
   return general;
 }
 
+type CategoryDetailKey = keyof ServiceCategoryDetails;
+type CategoryDetailField =
+  | { kind: 'select'; key: CategoryDetailKey; label: string; options: { value: string; label: string }[] }
+  | { kind: 'toggle'; key: CategoryDetailKey; label: string; description: string };
+type CategoryDetailGroup = {
+  categories: string[];
+  title: string;
+  description: string;
+  fields: CategoryDetailField[];
+};
+
+const SERVICE_CATEGORY_DETAIL_GROUPS: CategoryDetailGroup[] = [
+  {
+    categories: ['Property and asset management', 'HOA and community association management'],
+    title: 'Management setup',
+    description: 'Capture the fee basis and reporting rhythm used for management work.',
+    fields: [
+      { kind: 'select', key: 'management_fee_basis', label: 'Management fee basis', options: [
+        { value: 'fixed_monthly', label: 'Fixed monthly fee' },
+        { value: 'per_unit', label: 'Per unit' },
+        { value: 'percentage_of_rent', label: 'Percentage of rent' },
+        { value: 'custom', label: 'Custom arrangement' },
+      ] },
+      { kind: 'select', key: 'owner_report_frequency', label: 'Owner / board reporting', options: [
+        { value: 'monthly', label: 'Monthly' },
+        { value: 'quarterly', label: 'Quarterly' },
+        { value: 'annually', label: 'Annually' },
+      ] },
+    ],
+  },
+  {
+    categories: ['Leasing and tenant placement'],
+    title: 'Leasing setup',
+    description: 'Clarify how placement work is priced and whether screening is part of the service.',
+    fields: [
+      { kind: 'select', key: 'placement_fee_basis', label: 'Placement fee basis', options: [
+        { value: 'flat_fee', label: 'Flat fee' },
+        { value: 'first_month_rent', label: 'First month’s rent' },
+        { value: 'annual_rent_percentage', label: 'Percentage of annual rent' },
+        { value: 'custom', label: 'Custom arrangement' },
+      ] },
+      { kind: 'toggle', key: 'tenant_screening_included', label: 'Tenant screening included', description: 'Screening is included in this service offering.' },
+    ],
+  },
+  {
+    categories: ['Maintenance and repairs', 'Emergency and after-hours response'],
+    title: 'Response and coverage',
+    description: 'Set the response expectation and whether this offering includes emergency coverage.',
+    fields: [
+      { kind: 'select', key: 'response_target', label: 'Response target', options: [
+        { value: 'within_4_hours', label: 'Within 4 hours' },
+        { value: 'same_day', label: 'Same day' },
+        { value: 'within_24_hours', label: 'Within 24 hours' },
+        { value: 'within_48_hours', label: 'Within 48 hours' },
+      ] },
+      { kind: 'toggle', key: 'emergency_support_available', label: 'Emergency support available', description: 'This service can handle urgent or after-hours requests.' },
+    ],
+  },
+  {
+    categories: ['Preventive maintenance', 'Cleaning and janitorial', 'Landscaping and groundskeeping', 'Utilities and energy management'],
+    title: 'Service cadence',
+    description: 'Record the usual schedule for this recurring or on-demand service.',
+    fields: [
+      { kind: 'select', key: 'service_frequency', label: 'Typical service frequency', options: [
+        { value: 'on_demand', label: 'On demand' },
+        { value: 'weekly', label: 'Weekly' },
+        { value: 'monthly', label: 'Monthly' },
+        { value: 'quarterly', label: 'Quarterly' },
+        { value: 'annually', label: 'Annually' },
+      ] },
+    ],
+  },
+  {
+    categories: ['Security and access control'],
+    title: 'Security coverage',
+    description: 'Record the usual coverage rhythm and the response expectations for access or security events.',
+    fields: [
+      { kind: 'select', key: 'service_frequency', label: 'Coverage frequency', options: [
+        { value: 'on_demand', label: 'On demand' },
+        { value: 'weekly', label: 'Weekly' },
+        { value: 'monthly', label: 'Monthly' },
+        { value: 'quarterly', label: 'Quarterly' },
+        { value: 'annually', label: 'Annually' },
+      ] },
+      { kind: 'select', key: 'response_target', label: 'Incident response target', options: [
+        { value: 'within_4_hours', label: 'Within 4 hours' },
+        { value: 'same_day', label: 'Same day' },
+        { value: 'within_24_hours', label: 'Within 24 hours' },
+        { value: 'within_48_hours', label: 'Within 48 hours' },
+      ] },
+      { kind: 'toggle', key: 'emergency_support_available', label: 'Emergency support available', description: 'This service can handle urgent or after-hours security requests.' },
+    ],
+  },
+  {
+    categories: ['Inspections and compliance'],
+    title: 'Inspection setup',
+    description: 'Define the inspection schedule and whether the service delivers a written report.',
+    fields: [
+      { kind: 'select', key: 'inspection_frequency', label: 'Inspection frequency', options: [
+        { value: 'monthly', label: 'Monthly' },
+        { value: 'quarterly', label: 'Quarterly' },
+        { value: 'semi_annually', label: 'Twice per year' },
+        { value: 'annually', label: 'Annually' },
+        { value: 'as_needed', label: 'As needed' },
+      ] },
+      { kind: 'toggle', key: 'written_report_included', label: 'Written report included', description: 'A documented inspection or compliance report is part of the service.' },
+    ],
+  },
+  {
+    categories: ['Rent collection and financial management', 'Accounting and owner reporting'],
+    title: 'Financial reporting setup',
+    description: 'Capture how often financial information is reported and whether reconciliation is included.',
+    fields: [
+      { kind: 'select', key: 'financial_report_frequency', label: 'Financial reporting frequency', options: [
+        { value: 'monthly', label: 'Monthly' },
+        { value: 'quarterly', label: 'Quarterly' },
+        { value: 'annually', label: 'Annually' },
+      ] },
+      { kind: 'toggle', key: 'reconciliation_included', label: 'Account reconciliation included', description: 'The service includes reconciling collected amounts and account activity.' },
+    ],
+  },
+  {
+    categories: ['Lease administration'],
+    title: 'Lease administration setup',
+    description: 'Specify whether the service includes lease renewal reminders.',
+    fields: [
+      { kind: 'toggle', key: 'renewal_reminders_included', label: 'Renewal reminders included', description: 'The service tracks upcoming renewal dates and prompts the team.' },
+    ],
+  },
+  {
+    categories: ['Move-in and move-out coordination'],
+    title: 'Turnover setup',
+    description: 'Make the handover responsibilities clear for each resident transition.',
+    fields: [
+      { kind: 'toggle', key: 'turnover_inspection_included', label: 'Move-in / move-out inspection included', description: 'The service includes a documented condition inspection.' },
+      { kind: 'toggle', key: 'key_handover_included', label: 'Key handover included', description: 'The service coordinates key or access-device handover.' },
+    ],
+  },
+  {
+    categories: ['Vendor and contractor coordination'],
+    title: 'Vendor coordination setup',
+    description: 'Clarify whether the team sources vendors, coordinates them, or does both.',
+    fields: [
+      { kind: 'select', key: 'vendor_coordination_scope', label: 'Vendor coordination scope', options: [
+        { value: 'source', label: 'Source vendors' },
+        { value: 'coordinate', label: 'Coordinate assigned vendors' },
+        { value: 'source_and_coordinate', label: 'Source and coordinate' },
+      ] },
+    ],
+  },
+  {
+    categories: ['Renovation and capital projects'],
+    title: 'Project delivery setup',
+    description: 'Set the team’s role in renovation and capital work.',
+    fields: [
+      { kind: 'select', key: 'capital_project_scope', label: 'Project support scope', options: [
+        { value: 'planning', label: 'Planning' },
+        { value: 'oversight', label: 'Project oversight' },
+        { value: 'planning_and_oversight', label: 'Planning and oversight' },
+      ] },
+    ],
+  },
+];
+
+function categoryDetailGroup(category: string) {
+  return SERVICE_CATEGORY_DETAIL_GROUPS.find((group) => group.categories.includes(category));
+}
+
+function relevantCategoryDetails(category: string, details: ServiceCategoryDetails): ServiceCategoryDetails {
+  const group = categoryDetailGroup(category);
+  if (!group) return {};
+  return Object.fromEntries(group.fields
+    .map((field) => [field.key, details[field.key]] as const)
+    .filter(([, value]) => value !== undefined)) as ServiceCategoryDetails;
+}
+
+function categoryDetailValue(field: CategoryDetailField, details: ServiceCategoryDetails) {
+  const value = details[field.key];
+  if (typeof value === 'boolean') return value ? 'Included' : 'Not included';
+  if (typeof value !== 'string' || !value) return 'Not set';
+  return field.kind === 'select' ? field.options.find((option) => option.value === value)?.label ?? value : value;
+}
+
+function CategorySpecificInputs({
+  category,
+  details,
+  onChange,
+}: {
+  category: string;
+  details: ServiceCategoryDetails;
+  onChange: (key: CategoryDetailKey, value: string | boolean) => void;
+}) {
+  const group = categoryDetailGroup(category);
+  if (!group) return null;
+
+  return (
+    <section data-testid="panel-category-specific-setup" className="sm:col-span-2 rounded-[11px] border border-[#eadbd1] bg-[#fbf5f0] p-3.5">
+      <div className="mb-3"><p className="text-[11px] font-semibold text-[#34312c]">{group.title}</p><p className="mt-1 text-[10px] leading-4 text-[#89847c]">{group.description} These fields are optional.</p></div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {group.fields.map((field) => field.kind === 'select'
+          ? <Field key={field.key} label={field.label}><FlowPointSelect testId={`select-category-detail-${field.key}`} value={String(details[field.key] ?? '')} onChange={(value) => onChange(field.key, value)} placeholder="Choose an option" options={field.options} /></Field>
+          : <label key={field.key} className="flex min-h-[62px] items-center gap-3 rounded-[9px] border border-[#e8ded5] bg-white px-3 py-2.5">
+              <input data-testid={`toggle-category-detail-${field.key}`} type="checkbox" checked={details[field.key] === true} onChange={(event) => onChange(field.key, event.currentTarget.checked)} className="h-4 w-4 accent-[#a96d53]" />
+              <span><span className="block text-[11px] font-semibold text-[#403c35]">{field.label}</span><span className="mt-0.5 block text-[10px] leading-4 text-[#89847c]">{field.description}</span></span>
+            </label>)}
+      </div>
+    </section>
+  );
+}
+
 function GuidedServiceForm({
   service,
   relationships,
@@ -382,6 +605,7 @@ function GuidedServiceForm({
     typical_response_time: service?.typical_response_time ?? '',
     internal_instructions: service?.internal_instructions ?? '',
     escalation_instructions: service?.escalation_instructions ?? '',
+    category_details: service?.category_details ?? {},
     status: service?.status ?? 'active',
   }));
   const [contactIds, setContactIds] = useState(() => relationships.contacts.filter((item) => item.service_id === service?.id).map((item) => String(item.contact_id)));
@@ -397,12 +621,17 @@ function GuidedServiceForm({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const guidance = categoryGuidance(form.category);
+  const categoryDetails = form.category_details ?? {};
+  const categoryFields = categoryDetailGroup(form.category);
   const categoryOptions = SERVICE_CATEGORIES.some((item) => item === form.category)
     ? SERVICE_CATEGORIES.map((item) => ({ value: item, label: item }))
     : [...SERVICE_CATEGORIES.map((item) => ({ value: item, label: item })), ...(form.category ? [{ value: form.category, label: form.category, secondary: 'Existing category' }] : [])];
   const set = <K extends keyof ServiceDraft>(key: K, value: ServiceDraft[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: '' }));
+  };
+  const updateCategoryDetail = (key: CategoryDetailKey, value: string | boolean) => {
+    set('category_details', { ...categoryDetails, [key]: value } as ServiceCategoryDetails);
   };
   const contactOptions = contacts.filter((item) => !contactIds.includes(String(item.id)));
   const staffOptions = staff.filter((item) => !staffIds.includes(String(item.id)));
@@ -439,6 +668,7 @@ function GuidedServiceForm({
         ...form,
         name: form.name.trim(),
         category: form.category.trim(),
+        category_details: relevantCategoryDetails(form.category, categoryDetails),
         short_description: form.short_description?.trim() || null,
         description: form.description?.trim() || null,
         customer_facing_description: form.customer_facing_description?.trim() || null,
@@ -517,6 +747,7 @@ function GuidedServiceForm({
                 <Field label="Catalog status"><FlowPointSelect value={form.status} onChange={(value) => set('status', value as ServiceDraft['status'])} placeholder="Select status" options={SERVICE_STATUSES.map((item) => ({ ...item }))} /></Field>
                 <div className="sm:col-span-2"><Field label="Short description" hint="Shown in the catalog"><input data-testid="input-service-short-description" className={inputClass} value={form.short_description ?? ''} onChange={(event) => set('short_description', event.target.value)} placeholder={guidance.short} /></Field></div>
                 <div className="sm:col-span-2"><Field label="Detailed description" hint="Optional"><textarea data-testid="input-service-description" className={textAreaClass} rows={3} value={form.description ?? ''} onChange={(event) => set('description', event.target.value)} placeholder={guidance.description} /></Field></div>
+                <CategorySpecificInputs category={form.category} details={categoryDetails} onChange={updateCategoryDetail} />
               </div>
             </div>}
             {step === 1 && <div>
@@ -550,7 +781,7 @@ function GuidedServiceForm({
                   <button type="button" data-testid="button-edit-service-identity" onClick={() => setStep(0)} className="shrink-0 text-[10px] font-semibold text-[#965d45] hover:underline">Edit</button>
                 </div>
                 <div className="grid grid-cols-1 gap-0 sm:grid-cols-2">
-                  <div className="border-b border-[#f0eeeb] p-4 sm:border-r"><div className="flex items-center justify-between gap-3"><h4 className="text-[11px] font-semibold text-[#403c35]">Delivery details</h4><button type="button" data-testid="button-edit-service-delivery" onClick={() => setStep(1)} className="text-[10px] font-semibold text-[#965d45] hover:underline">Edit</button></div><Detail label="Detailed description" value={form.description} /><Detail label="Customer-facing description" value={form.customer_facing_description} /><Detail label={guidance.availabilityLabel} value={form.availability_information} /><Detail label={guidance.responseLabel} value={form.typical_response_time} /><Detail label={guidance.requirementsLabel} value={form.requirements} /><Detail label={guidance.includedLabel} value={form.included_details} /><Detail label={guidance.excludedLabel} value={form.excluded_details} /><Detail label="Pricing" value={form.pricing_information} /><Detail label="Team guidance" value={form.internal_instructions} /><Detail label={guidance.escalationLabel} value={form.escalation_instructions} /></div>
+                   <div className="border-b border-[#f0eeeb] p-4 sm:border-r"><div className="flex items-center justify-between gap-3"><h4 className="text-[11px] font-semibold text-[#403c35]">Delivery details</h4><button type="button" data-testid="button-edit-service-delivery" onClick={() => setStep(1)} className="text-[10px] font-semibold text-[#965d45] hover:underline">Edit</button></div>{categoryFields?.fields.map((field) => <Detail key={field.key} label={field.label} value={categoryDetailValue(field, categoryDetails)} />)}<Detail label="Detailed description" value={form.description} /><Detail label="Customer-facing description" value={form.customer_facing_description} /><Detail label={guidance.availabilityLabel} value={form.availability_information} /><Detail label={guidance.responseLabel} value={form.typical_response_time} /><Detail label={guidance.requirementsLabel} value={form.requirements} /><Detail label={guidance.includedLabel} value={form.included_details} /><Detail label={guidance.excludedLabel} value={form.excluded_details} /><Detail label="Pricing" value={form.pricing_information} /><Detail label="Team guidance" value={form.internal_instructions} /><Detail label={guidance.escalationLabel} value={form.escalation_instructions} /></div>
                   <div className="p-4"><h4 className="text-[11px] font-semibold text-[#403c35]">Customer contracts</h4><p className="mt-2 text-[11px] leading-5 text-[#89847c]">Add the customer, agreed price, billing frequency, and contract dates from the separate Service contracts section after saving this catalog offering.</p></div>
                 </div>
               </div>
@@ -614,6 +845,7 @@ function ServiceProfile({
   relationships,
   onClose,
   onEdit,
+  editDisabled,
   onAddContract,
   onDelete,
 }: {
@@ -621,6 +853,7 @@ function ServiceProfile({
   relationships: RelationshipState;
   onClose: () => void;
   onEdit: () => void;
+  editDisabled: boolean;
   onAddContract: () => void;
   onDelete: () => void;
 }) {
@@ -631,6 +864,8 @@ function ServiceProfile({
   const staff = relationships.staff.filter((item) => item.service_id === service.id);
   const properties = relationships.properties.filter((item) => item.service_id === service.id);
   const units = relationships.units.filter((item) => item.service_id === service.id);
+  const detailGroup = categoryDetailGroup(service.category);
+  const detailValues = service.category_details ?? {};
   useEffect(() => {
     if (tab !== 'activity') return;
     let active = true;
@@ -656,7 +891,7 @@ function ServiceProfile({
         </div>
         <div className="flex items-center gap-2">
           {service.status === 'active' && <button type="button" data-testid="button-add-contract-from-service" onClick={onAddContract} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[11px] font-medium text-[#625e57] hover:bg-[#f0eeea]"><Plus size={12} />Add contract</button>}
-          <button onClick={onEdit} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[11px] font-medium text-[#625e57] hover:bg-[#f0eeea]"><Pencil size={12} />Edit</button>
+          <button type="button" onClick={onEdit} disabled={editDisabled} title={editDisabled ? 'Apply the service category details migration first' : undefined} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[11px] font-medium text-[#625e57] hover:bg-[#f0eeea] disabled:cursor-not-allowed disabled:opacity-40"><Pencil size={12} />Edit</button>
           <button onClick={onDelete} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#f0c8c3] px-2.5 text-[11px] font-medium text-[#a33a30] hover:bg-[#fff7f6]"><Trash2 size={12} />Delete</button>
           <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#e4e2de] text-[#817d76] hover:bg-[#f0eeea]"><X size={14} /></button>
         </div>
@@ -664,6 +899,7 @@ function ServiceProfile({
       <div className="flex gap-1 overflow-x-auto border-b border-[#ebe8e3] px-5 pt-2">{tabs.map(([value, label]) => <button key={value} onClick={() => setTab(value)} className={`whitespace-nowrap border-b-2 px-2 pb-2.5 text-[11px] font-semibold transition-colors ${tab === value ? 'border-[#151412] text-[#151412]' : 'border-transparent text-[#9a958d] hover:text-[#4d4942]'}`}>{label}</button>)}</div>
       <div className="max-h-[calc(92vh-138px)] overflow-y-auto px-5 py-5">
         {tab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Service details</p><Detail label="Category" value={service.category} /><Detail label="Status" value={serviceStatusLabel(service.status)} /><Detail label="Short description" value={service.short_description} /><Detail label="Detailed description" value={service.description} /></div><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Customer-facing information</p><Detail label="Description" value={service.customer_facing_description} /><Detail label="Requirements" value={service.requirements} /><Detail label="Included" value={service.included_details} /><Detail label="Not included" value={service.excluded_details} /><Detail label="Pricing" value={service.pricing_information} /></div></div>}
+        {tab === 'overview' && detailGroup && <div className="mt-4 rounded-[11px] border border-[#e9e6e1] bg-white p-4"><p className="mb-1 text-[12px] font-semibold text-[#35322e]">{detailGroup.title}</p><p className="mb-3 text-[10px] text-[#8e8981]">{detailGroup.description}</p>{detailGroup.fields.map((field) => <Detail key={field.key} label={field.label} value={categoryDetailValue(field, detailValues)} />)}</div>}
         {tab === 'people' && <div className="space-y-2">{contacts.length ? contacts.map((item) => <div key={String(item.id)} className="flex items-center justify-between rounded-[11px] border border-[#e9e6e1] bg-white p-3"><div className="flex items-center gap-3"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ece8e1] text-[#706b62]"><UserRound size={15} /></div><div><p className="text-[12px] font-semibold text-[#35322e]">{item.contact?.name ?? 'Contact unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{item.contact?.contact_type ?? 'Contact'} · {item.contact?.customer_id ?? 'Customer ID unavailable'}</p></div></div><span className="text-[10px] text-[#aaa59d]">{item.relationship_status ?? 'Active relationship'}</span></div>) : <EmptyState icon={Users2} title="No contacts use this service yet" description="Add contacts from the service editor when this offering is assigned." />}</div>}
         {tab === 'places' && <div className="space-y-4"><div><p className="mb-2 text-[12px] font-semibold text-[#35322e]">Properties</p>{properties.length ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2">{properties.map((item) => <div key={String(item.id)} className="rounded-[11px] border border-[#e9e6e1] bg-white p-3"><p className="text-[12px] font-semibold text-[#35322e]">{item.property?.name ?? 'Property unavailable'}</p><p className="mt-1 flex items-center gap-1 text-[10px] text-[#8e8981]"><MapPin size={10} />{[item.property?.city, item.property?.address_line1].filter(Boolean).join(' · ') || 'Address unavailable'}</p></div>)}</div> : <p className="rounded-[10px] border border-dashed border-[#d9d5ce] px-4 py-6 text-center text-[11px] text-[#97928a]">No properties associated.</p>}</div><div><p className="mb-2 text-[12px] font-semibold text-[#35322e]">Units</p>{units.length ? <div className="grid grid-cols-1 gap-2 md:grid-cols-2">{units.map((item) => <div key={String(item.id)} className="rounded-[11px] border border-[#e9e6e1] bg-white p-3"><p className="text-[12px] font-semibold text-[#35322e]">Unit {item.unit?.unit_number ?? 'Unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{item.unit?.property?.name ?? 'Property unavailable'}</p></div>)}</div> : <p className="rounded-[10px] border border-dashed border-[#d9d5ce] px-4 py-6 text-center text-[11px] text-[#97928a]">No units associated.</p>}</div></div>}
         {tab === 'team' && <div className="space-y-2">{staff.length ? staff.map((item) => <div key={String(item.id)} className="flex items-center justify-between rounded-[11px] border border-[#e9e6e1] bg-white p-3"><div className="flex items-center gap-3"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ece8e1] text-[#706b62]"><Users2 size={15} /></div><div><p className="text-[12px] font-semibold text-[#35322e]">{item.staff?.name ?? 'Staff unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{item.staff?.role ?? 'Role not set'}{item.staff?.department ? ` · ${item.staff.department}` : ''}</p></div></div><span className="text-[10px] text-[#aaa59d]">{item.assignment_role ?? 'Responsible team member'}</span></div>) : <EmptyState icon={Users2} title="No staff assigned yet" description="Assign responsible staff members from the service editor." />}</div>}
@@ -715,6 +951,7 @@ function ServiceContractCard({ contract, onEdit, onDelete, editDisabled = false 
 export default function ServicesPage() {
   useAuth();
   const [services, setServices] = useState<Service[]>([]);
+  const [categoryDetailsMigrationMissing, setCategoryDetailsMigrationMissing] = useState(false);
   const [contracts, setContracts] = useState<ServiceContract[]>([]);
   const [contractError, setContractError] = useState<string | null>(null);
   const [contactLoadError, setContactLoadError] = useState<string | null>(null);
@@ -742,11 +979,13 @@ export default function ServicesPage() {
     setContractError(null);
     setContactLoadError(null);
     try {
-      const [servicesResult, contractsResult, contactsResult] = await Promise.all([
+      const [servicesResult, contractsResult, contactsResult, categoryDetailsResult] = await Promise.all([
         supabase.from('services').select('*').order('name'),
         supabase.from('service_contracts').select('*, contact:contacts(id, name, customer_id, contact_type, email, phone), service:services(id, name, category, status)').order('created_at', { ascending: false }),
         supabase.from('contacts').select('*').order('name'),
+        supabase.from('services').select('id, category_details').limit(1),
       ]);
+      setCategoryDetailsMigrationMissing(Boolean(categoryDetailsResult.error && isMissingCategoryDetailsColumn(categoryDetailsResult.error.message)));
       if (servicesResult.error) {
         setError(servicesResult.error.message);
         setServices([]);
@@ -772,6 +1011,7 @@ export default function ServicesPage() {
       setServices([]);
       setContracts([]);
       setContacts([]);
+      setCategoryDetailsMigrationMissing(false);
     } finally {
       setLoading(false);
     }
@@ -783,11 +1023,11 @@ export default function ServicesPage() {
     let saved: Service;
     if (formService) {
       const { data, error: saveError } = await supabase.from('services').update(draft).eq('id', formService.id).select().single();
-      if (saveError) throw new Error(saveError.message);
+      if (saveError) throw new Error(serviceSaveErrorMessage(saveError.message));
       saved = data as Service;
     } else {
       const { data, error: saveError } = await supabase.from('services').insert([draft]).select().single();
-      if (saveError) throw new Error(saveError.message);
+      if (saveError) throw new Error(serviceSaveErrorMessage(saveError.message));
       saved = data as Service;
     }
     setServices((current) => [...current.filter((item) => item.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name)));
@@ -915,7 +1155,7 @@ export default function ServicesPage() {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#f8f7f5]">
         <header className="flex flex-shrink-0 items-center justify-between border-b border-[#e9e6e1] bg-[#fbfaf8] px-5 py-4 sm:px-8">
           <div><p className="text-[10px] font-semibold uppercase tracking-[.1em] text-[#a19c93]">Operations and knowledge</p><h1 className="mt-1 text-[20px] font-semibold tracking-[-.02em] text-[#151412]">Services</h1><p className="mt-1 max-w-[720px] text-[12px] text-[#77736d]">Set up the services your company offers, then record each customer agreement separately.</p></div>
-          <div className="flex items-center gap-2"><NotificationBell /><button type="button" data-testid="button-add-service-or-contract" onClick={() => activeSection === 'catalog' ? setFormService(null) : openNewContract()} disabled={loading || (activeSection === 'contracts' && (Boolean(contractError || contactLoadError) || !services.some((item) => item.status === 'active')))} title={activeSection === 'contracts' && contractError ? contractMigrationMissing ? 'Apply the service contracts migration first' : 'Contracts cannot be loaded right now' : undefined} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#151412] px-3.5 text-[12px] font-semibold text-white shadow-[0_2px_5px_rgba(0,0,0,.12)] hover:bg-[#312f2c] disabled:cursor-not-allowed disabled:opacity-40"><Plus size={14} />{activeSection === 'catalog' ? 'Add service' : 'Add contract'}</button></div>
+          <div className="flex items-center gap-2"><NotificationBell /><button type="button" data-testid="button-add-service-or-contract" onClick={() => activeSection === 'catalog' ? setFormService(null) : openNewContract()} disabled={loading || (activeSection === 'catalog' && categoryDetailsMigrationMissing) || (activeSection === 'contracts' && (Boolean(contractError || contactLoadError) || !services.some((item) => item.status === 'active')))} title={activeSection === 'catalog' && categoryDetailsMigrationMissing ? 'Apply the service category details migration first' : activeSection === 'contracts' && contractError ? contractMigrationMissing ? 'Apply the service contracts migration first' : 'Contracts cannot be loaded right now' : undefined} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#151412] px-3.5 text-[12px] font-semibold text-white shadow-[0_2px_5px_rgba(0,0,0,.12)] hover:bg-[#312f2c] disabled:cursor-not-allowed disabled:opacity-40"><Plus size={14} />{activeSection === 'catalog' ? 'Add service' : 'Add contract'}</button></div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1240px] px-5 py-6 sm:px-8 sm:py-8">
@@ -925,6 +1165,7 @@ export default function ServicesPage() {
               <button type="button" onClick={() => setActiveSection('contracts')} className={`flex items-center gap-2 border-b-2 px-3 py-2.5 text-[12px] font-semibold ${activeSection === 'contracts' ? 'border-[#151412] text-[#151412]' : 'border-transparent text-[#8e8981] hover:text-[#4d4942]'}`}><Users2 size={14} />Service contracts <span className="rounded-full bg-[#f0eeeb] px-1.5 py-0.5 text-[10px]">{contracts.length}</span></button>
             </div>
             {activeSection === 'catalog' && <>
+            {categoryDetailsMigrationMissing && <div className="mb-5"><InlineError message="Category-specific service settings are not enabled yet. Apply supabase/service-category-details-migration.sql after services-migration.sql, then refresh." /></div>}
             <div className="mb-5 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
               <div><p className="text-[13px] text-[#706c64]">A shared catalog of the work your company can provide.</p><p className="mt-1 text-[11px] text-[#a19c93]">{services.length} {services.length === 1 ? 'service' : 'services'} documented</p></div>
               <div className="flex flex-col gap-2 sm:flex-row"><label className="relative block min-w-[240px]"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a8a39b]" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search service or category" className={`${inputClass} pl-9`} /></label><div className="flex gap-2"><div className="min-w-[140px]"><FlowPointSelect value={categoryFilter} onChange={setCategoryFilter} placeholder="All categories" options={categories} emptyLabel="No categories yet" /></div><div className="min-w-[132px]"><FlowPointSelect value={statusFilter} onChange={setStatusFilter} placeholder="All statuses" options={SERVICE_STATUSES.map((item) => ({ ...item }))} /></div><button onClick={clearFilters} className="flex h-[39px] items-center justify-center gap-2 rounded-[9px] border border-[#e4e2de] px-3 text-[12px] font-medium text-[#625e57] hover:bg-[#f4f2ef]"><Filter size={13} />Clear</button><button onClick={loadData} disabled={loading} className="flex h-[39px] items-center justify-center rounded-[9px] border border-[#e4e2de] px-3 text-[#817d76] hover:bg-[#f4f2ef] disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button></div></div>
@@ -955,7 +1196,7 @@ export default function ServicesPage() {
         </div>
         <AnimatePresence>{formService !== undefined && <ServiceForm service={formService} relationships={EMPTY_RELATIONSHIPS} contacts={contacts} staff={[]} properties={[]} units={[]} onSave={saveService} onClose={() => setFormService(undefined)} />}</AnimatePresence>
         <AnimatePresence>{formContract !== undefined && <ServiceContractDialog contract={formContract} contacts={contacts} services={services} initialServiceId={formContractServiceId ?? undefined} onSave={saveContract} onClose={closeContractForm} />}</AnimatePresence>
-        <AnimatePresence>{profileService && <ServiceProfile service={profileService} relationships={EMPTY_RELATIONSHIPS} onClose={() => setProfileService(null)} onEdit={() => { setFormService(profileService); setProfileService(null); }} onAddContract={() => openContractForService(profileService)} onDelete={() => setDeleteService(profileService)} />}</AnimatePresence>
+        <AnimatePresence>{profileService && <ServiceProfile service={profileService} relationships={EMPTY_RELATIONSHIPS} editDisabled={categoryDetailsMigrationMissing} onClose={() => setProfileService(null)} onEdit={() => { setFormService(profileService); setProfileService(null); }} onAddContract={() => openContractForService(profileService)} onDelete={() => setDeleteService(profileService)} />}</AnimatePresence>
         <AnimatePresence>{deleteService && <ConfirmDelete name={deleteService.name} description="This permanently deletes the catalog offering and its old service links. Any customer contracts must be deleted first." deleting={deleting} onCancel={() => setDeleteService(null)} onConfirm={deleteSelected} />}</AnimatePresence>
         <AnimatePresence>{deleteContract && <ConfirmDelete name={`${deleteContract.contact?.name ?? 'customer'} — ${deleteContract.service?.name ?? 'service contract'}`} description="This permanently removes the customer agreement, including its price and contract dates." deleting={deleting} onCancel={() => setDeleteContract(null)} onConfirm={deleteSelectedContract} />}</AnimatePresence>
       </div>

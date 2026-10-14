@@ -2,6 +2,25 @@ export type ServiceStatus = 'active' | 'inactive';
 export type ServiceContractStatus = 'active' | 'pending' | 'completed' | 'cancelled';
 export type ServiceBillingPeriod = 'one_time' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
 
+export interface ServiceCategoryDetails {
+  management_fee_basis?: 'fixed_monthly' | 'per_unit' | 'percentage_of_rent' | 'custom';
+  owner_report_frequency?: 'monthly' | 'quarterly' | 'annually';
+  placement_fee_basis?: 'flat_fee' | 'first_month_rent' | 'annual_rent_percentage' | 'custom';
+  tenant_screening_included?: boolean;
+  emergency_support_available?: boolean;
+  response_target?: 'within_4_hours' | 'same_day' | 'within_24_hours' | 'within_48_hours';
+  service_frequency?: 'on_demand' | 'weekly' | 'monthly' | 'quarterly' | 'annually';
+  inspection_frequency?: 'monthly' | 'quarterly' | 'semi_annually' | 'annually' | 'as_needed';
+  written_report_included?: boolean;
+  financial_report_frequency?: 'monthly' | 'quarterly' | 'annually';
+  reconciliation_included?: boolean;
+  renewal_reminders_included?: boolean;
+  turnover_inspection_included?: boolean;
+  key_handover_included?: boolean;
+  vendor_coordination_scope?: 'source' | 'coordinate' | 'source_and_coordinate';
+  capital_project_scope?: 'planning' | 'oversight' | 'planning_and_oversight';
+}
+
 export interface Service {
   id: string;
   company_id: string | null;
@@ -20,6 +39,7 @@ export interface Service {
   typical_response_time: string | null;
   internal_instructions: string | null;
   escalation_instructions: string | null;
+  category_details: ServiceCategoryDetails;
   status: ServiceStatus;
 }
 
