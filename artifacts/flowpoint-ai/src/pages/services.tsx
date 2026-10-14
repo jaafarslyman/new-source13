@@ -614,12 +614,14 @@ function ServiceProfile({
   relationships,
   onClose,
   onEdit,
+  onAddContract,
   onDelete,
 }: {
   service: Service;
   relationships: RelationshipState;
   onClose: () => void;
   onEdit: () => void;
+  onAddContract: () => void;
   onDelete: () => void;
 }) {
   const [tab, setTab] = useState<'overview' | 'people' | 'places' | 'team' | 'instructions' | 'activity'>('overview');
@@ -653,6 +655,7 @@ function ServiceProfile({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {service.status === 'active' && <button type="button" data-testid="button-add-contract-from-service" onClick={onAddContract} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[11px] font-medium text-[#625e57] hover:bg-[#f0eeea]"><Plus size={12} />Add contract</button>}
           <button onClick={onEdit} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[11px] font-medium text-[#625e57] hover:bg-[#f0eeea]"><Pencil size={12} />Edit</button>
           <button onClick={onDelete} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#f0c8c3] px-2.5 text-[11px] font-medium text-[#a33a30] hover:bg-[#fff7f6]"><Trash2 size={12} />Delete</button>
           <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#e4e2de] text-[#817d76] hover:bg-[#f0eeea]"><X size={14} /></button>
@@ -684,7 +687,7 @@ function ContractStatusPill({ status }: { status: ServiceContractStatus }) {
   return <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${style}`}>{serviceContractStatusLabel(status)}</span>;
 }
 
-function ServiceContractCard({ contract, onEdit, onDelete }: { contract: ServiceContract; onEdit: () => void; onDelete: () => void }) {
+function ServiceContractCard({ contract, onEdit, onDelete, editDisabled = false }: { contract: ServiceContract; onEdit: () => void; onDelete: () => void; editDisabled?: boolean }) {
   const customer = contract.contact?.name ?? 'Contact unavailable';
   const service = contract.service?.name ?? 'Service unavailable';
   const amount = Number(contract.price_amount);
@@ -696,7 +699,7 @@ function ServiceContractCard({ contract, onEdit, onDelete }: { contract: Service
           <p className="truncate text-[13px] font-semibold text-[#171512]">{customer}</p>
           <p className="mt-1 text-[11px] text-[#8e8981]">{contract.contact?.customer_id ?? contract.contact?.contact_type ?? 'Customer'} · {service}</p>
         </div>
-        <div className="flex items-center gap-2"><ContractStatusPill status={contract.status} /><button type="button" onClick={onEdit} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[11px] font-medium text-[#625e57] hover:bg-[#f0eeea]"><Pencil size={12} />Edit</button><button type="button" aria-label={`Delete contract for ${customer}`} onClick={onDelete} className="flex h-8 w-8 items-center justify-center rounded-[8px] border border-[#f0c8c3] text-[#a33a30] hover:bg-[#fff7f6]"><Trash2 size={12} /></button></div>
+        <div className="flex items-center gap-2"><ContractStatusPill status={contract.status} /><button type="button" onClick={onEdit} disabled={editDisabled} title={editDisabled ? 'Contacts could not be loaded' : undefined} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[11px] font-medium text-[#625e57] hover:bg-[#f0eeea] disabled:cursor-not-allowed disabled:opacity-40"><Pencil size={12} />Edit</button><button type="button" aria-label={`Delete contract for ${customer}`} onClick={onDelete} className="flex h-8 w-8 items-center justify-center rounded-[8px] border border-[#f0c8c3] text-[#a33a30] hover:bg-[#fff7f6]"><Trash2 size={12} /></button></div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-3 border-t border-[#f0eeeb] pt-3 sm:grid-cols-4">
         <div><p className="text-[9px] font-semibold uppercase tracking-[.07em] text-[#aaa59d]">Agreed price</p><p className="mt-1 text-[11px] font-semibold text-[#403c35]">{money}</p><p className="text-[10px] text-[#8e8981]">{serviceBillingPeriodLabel(contract.billing_period)}</p></div>
@@ -726,6 +729,7 @@ export default function ServicesPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [formService, setFormService] = useState<Service | null | undefined>(undefined);
   const [formContract, setFormContract] = useState<ServiceContract | null | undefined>(undefined);
+  const [formContractServiceId, setFormContractServiceId] = useState<string | null>(null);
   const [profileService, setProfileService] = useState<Service | null>(null);
   const [deleteService, setDeleteService] = useState<Service | null>(null);
   const [deleteContract, setDeleteContract] = useState<ServiceContract | null>(null);
@@ -735,25 +739,42 @@ export default function ServicesPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [servicesResult, contractsResult, contactsResult] = await Promise.all([
-      supabase.from('services').select('*').order('name'),
-      supabase.from('service_contracts').select('*, contact:contacts(id, name, customer_id, contact_type, email, phone), service:services(id, name, category, status)').order('created_at', { ascending: false }),
-      supabase.from('contacts').select('*').order('name'),
-    ]);
-    if (servicesResult.error) setError(servicesResult.error.message); else setServices((servicesResult.data as Service[]) ?? []);
-    if (contractsResult.error) {
+    setContractError(null);
+    setContactLoadError(null);
+    try {
+      const [servicesResult, contractsResult, contactsResult] = await Promise.all([
+        supabase.from('services').select('*').order('name'),
+        supabase.from('service_contracts').select('*, contact:contacts(id, name, customer_id, contact_type, email, phone), service:services(id, name, category, status)').order('created_at', { ascending: false }),
+        supabase.from('contacts').select('*').order('name'),
+      ]);
+      if (servicesResult.error) {
+        setError(servicesResult.error.message);
+        setServices([]);
+      } else {
+        setServices((servicesResult.data as Service[]) ?? []);
+      }
+      if (contractsResult.error) {
+        setContracts([]);
+        setContractError(contractsResult.error.message);
+      } else {
+        setContracts((contractsResult.data as unknown as ServiceContract[]) ?? []);
+      }
+      if (contactsResult.error) {
+        setContactLoadError(contactsResult.error.message);
+        setContacts([]);
+      } else {
+        setContacts((contactsResult.data as Contact[]) ?? []);
+      }
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : 'Unable to load services and contracts.';
+      setError(message);
+      setContractError(message);
+      setServices([]);
       setContracts([]);
-      setContractError(contractsResult.error.message);
-    } else {
-      setContracts((contractsResult.data as unknown as ServiceContract[]) ?? []);
-      setContractError(null);
+      setContacts([]);
+    } finally {
+      setLoading(false);
     }
-    if (contactsResult.error) setContactLoadError(contactsResult.error.message);
-    else {
-      setContactLoadError(null);
-      setContacts((contactsResult.data as Contact[]) ?? []);
-    }
-    setLoading(false);
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -845,6 +866,21 @@ export default function ServicesPage() {
     setFeedback({ tone: 'success', message: 'Service contract deleted.' });
   };
 
+  const openContractForService = (service: Service) => {
+    setProfileService(null);
+    setActiveSection('contracts');
+    setFormContractServiceId(service.id);
+    setFormContract(null);
+  };
+  const closeContractForm = () => {
+    setFormContract(undefined);
+    setFormContractServiceId(null);
+  };
+  const openNewContract = () => {
+    setFormContractServiceId(null);
+    setFormContract(null);
+  };
+
   const categories = useMemo(() => [...new Set(services.map((item) => item.category).filter(Boolean))].sort().map((value) => ({ value, label: value })), [services]);
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -866,6 +902,11 @@ export default function ServicesPage() {
       return (!needle || haystack.includes(needle)) && (!contractStatusFilter || contract.status === contractStatusFilter);
     });
   }, [contracts, contractSearch, contractStatusFilter]);
+  const contractMigrationMissing = Boolean(
+    contractError
+    && /service_contracts/i.test(contractError)
+    && /(does not exist|could not find the table|schema cache)/i.test(contractError),
+  );
   const clearFilters = () => { setSearch(''); setCategoryFilter(''); setStatusFilter(''); };
   const clearContractFilters = () => { setContractSearch(''); setContractStatusFilter(''); };
 
@@ -874,7 +915,7 @@ export default function ServicesPage() {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#f8f7f5]">
         <header className="flex flex-shrink-0 items-center justify-between border-b border-[#e9e6e1] bg-[#fbfaf8] px-5 py-4 sm:px-8">
           <div><p className="text-[10px] font-semibold uppercase tracking-[.1em] text-[#a19c93]">Operations and knowledge</p><h1 className="mt-1 text-[20px] font-semibold tracking-[-.02em] text-[#151412]">Services</h1><p className="mt-1 max-w-[720px] text-[12px] text-[#77736d]">Set up the services your company offers, then record each customer agreement separately.</p></div>
-          <div className="flex items-center gap-2"><NotificationBell /><button onClick={() => activeSection === 'catalog' ? setFormService(null) : setFormContract(null)} disabled={activeSection === 'contracts' && (Boolean(contractError || contactLoadError) || !services.some((item) => item.status === 'active'))} title={activeSection === 'contracts' && contractError ? 'Apply the service contracts migration first' : undefined} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#151412] px-3.5 text-[12px] font-semibold text-white shadow-[0_2px_5px_rgba(0,0,0,.12)] hover:bg-[#312f2c] disabled:cursor-not-allowed disabled:opacity-40"><Plus size={14} />{activeSection === 'catalog' ? 'Add service' : 'Add contract'}</button></div>
+          <div className="flex items-center gap-2"><NotificationBell /><button type="button" data-testid="button-add-service-or-contract" onClick={() => activeSection === 'catalog' ? setFormService(null) : openNewContract()} disabled={loading || (activeSection === 'contracts' && (Boolean(contractError || contactLoadError) || !services.some((item) => item.status === 'active')))} title={activeSection === 'contracts' && contractError ? contractMigrationMissing ? 'Apply the service contracts migration first' : 'Contracts cannot be loaded right now' : undefined} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#151412] px-3.5 text-[12px] font-semibold text-white shadow-[0_2px_5px_rgba(0,0,0,.12)] hover:bg-[#312f2c] disabled:cursor-not-allowed disabled:opacity-40"><Plus size={14} />{activeSection === 'catalog' ? 'Add service' : 'Add contract'}</button></div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1240px] px-5 py-6 sm:px-8 sm:py-8">
@@ -895,10 +936,11 @@ export default function ServicesPage() {
             {!loading && !error && filtered.length > 0 && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"><AnimatePresence mode="popLayout">{filtered.map((service) => <ServiceCard key={service.id} service={service} contractCount={contracts.filter((contract) => contract.service_id === service.id).length} onOpen={() => setProfileService(service)} />)}</AnimatePresence></div>}
             </>}
             {activeSection === 'contracts' && <>
-              {contractError && <div className="mb-5"><InlineError message={`Service contracts need the supplied Supabase migration. Apply supabase/service-contracts-migration.sql, then refresh this page. ${contractError}`} /></div>}
+              {contractError && <div className="mb-5"><InlineError message={contractMigrationMissing ? `Service contracts need the supplied Supabase migration. Apply supabase/service-contracts-migration.sql, then refresh this page. ${contractError}` : `Service contracts could not be loaded. ${contractError}`} /></div>}
               {contactLoadError && <div className="mb-5"><InlineError message={`Customer contacts could not be loaded, so contracts cannot be created or edited. ${contactLoadError}`} /></div>}
-              {!contractError && services.length === 0 && !loading && <EmptyState title="Set up a service first" description="Add the services your company provides in the Service catalog. You can then create a customer contract for each service." />}
-              {!contractError && services.length > 0 && <>
+              {error && !contractError && <div className="mb-5"><InlineError message={`The service catalog could not be loaded. ${error}`} /></div>}
+              {!contractError && !error && services.length === 0 && !loading && <EmptyState title="Set up a service first" description="Add the services your company provides in the Service catalog. You can then create a customer contract for each service." />}
+              {!contractError && !error && services.length > 0 && <>
                 <div className="mb-5 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
                   <div><p className="text-[13px] text-[#706c64]">Each record represents a customer receiving a service from your company.</p><p className="mt-1 text-[11px] text-[#a19c93]">{contracts.length} {contracts.length === 1 ? 'contract' : 'contracts'} recorded</p></div>
                   <div className="flex flex-col gap-2 sm:flex-row"><label className="relative block min-w-[240px]"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a8a39b]" /><input value={contractSearch} onChange={(event) => setContractSearch(event.target.value)} placeholder="Search customer or service" className={`${inputClass} pl-9`} /></label><div className="flex gap-2"><div className="min-w-[145px]"><FlowPointSelect value={contractStatusFilter} onChange={setContractStatusFilter} placeholder="All contract statuses" options={SERVICE_CONTRACT_STATUSES.map((item) => ({ ...item }))} /></div><button onClick={clearContractFilters} className="flex h-[39px] items-center justify-center gap-2 rounded-[9px] border border-[#e4e2de] px-3 text-[12px] font-medium text-[#625e57] hover:bg-[#f4f2ef]"><Filter size={13} />Clear</button><button onClick={loadData} disabled={loading} aria-label="Refresh service contracts" className="flex h-[39px] items-center justify-center rounded-[9px] border border-[#e4e2de] px-3 text-[#817d76] hover:bg-[#f4f2ef] disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button></div></div>
@@ -906,14 +948,14 @@ export default function ServicesPage() {
                 {loading && <div className="space-y-3">{[1, 2, 3].map((item) => <div key={item} className="h-[140px] animate-pulse rounded-[13px] border border-[#eeeae5] bg-[#f0eeeb]" />)}</div>}
                 {!loading && contracts.length === 0 && <EmptyState icon={Users2} title="No service contracts yet" description="Add a contract to record which contact is using a service, the agreed price, and the contract dates." />}
                 {!loading && contracts.length > 0 && filteredContracts.length === 0 && <div className="rounded-[14px] border border-[#e9e6e1] bg-white px-6 py-16 text-center"><Filter size={20} className="mx-auto text-[#bbb6ae]" /><p className="mt-3 text-[13px] font-semibold text-[#4a4741]">No matching contracts</p><button onClick={clearContractFilters} className="mt-4 text-[12px] font-semibold text-[#4a4741] underline underline-offset-2">Clear filters</button></div>}
-                {!loading && filteredContracts.length > 0 && <div className="space-y-3">{filteredContracts.map((contract) => <ServiceContractCard key={contract.id} contract={contract} onEdit={() => setFormContract(contract)} onDelete={() => setDeleteContract(contract)} />)}</div>}
+                {!loading && filteredContracts.length > 0 && <div className="space-y-3">{filteredContracts.map((contract) => <ServiceContractCard key={contract.id} contract={contract} editDisabled={Boolean(contactLoadError)} onEdit={() => { setFormContractServiceId(null); setFormContract(contract); }} onDelete={() => setDeleteContract(contract)} />)}</div>}
               </>}
             </>}
           </div>
         </div>
         <AnimatePresence>{formService !== undefined && <ServiceForm service={formService} relationships={EMPTY_RELATIONSHIPS} contacts={contacts} staff={[]} properties={[]} units={[]} onSave={saveService} onClose={() => setFormService(undefined)} />}</AnimatePresence>
-        <AnimatePresence>{formContract !== undefined && <ServiceContractDialog contract={formContract} contacts={contacts} services={services} onSave={saveContract} onClose={() => setFormContract(undefined)} />}</AnimatePresence>
-        <AnimatePresence>{profileService && <ServiceProfile service={profileService} relationships={EMPTY_RELATIONSHIPS} onClose={() => setProfileService(null)} onEdit={() => { setFormService(profileService); setProfileService(null); }} onDelete={() => setDeleteService(profileService)} />}</AnimatePresence>
+        <AnimatePresence>{formContract !== undefined && <ServiceContractDialog contract={formContract} contacts={contacts} services={services} initialServiceId={formContractServiceId ?? undefined} onSave={saveContract} onClose={closeContractForm} />}</AnimatePresence>
+        <AnimatePresence>{profileService && <ServiceProfile service={profileService} relationships={EMPTY_RELATIONSHIPS} onClose={() => setProfileService(null)} onEdit={() => { setFormService(profileService); setProfileService(null); }} onAddContract={() => openContractForService(profileService)} onDelete={() => setDeleteService(profileService)} />}</AnimatePresence>
         <AnimatePresence>{deleteService && <ConfirmDelete name={deleteService.name} description="This permanently deletes the catalog offering and its old service links. Any customer contracts must be deleted first." deleting={deleting} onCancel={() => setDeleteService(null)} onConfirm={deleteSelected} />}</AnimatePresence>
         <AnimatePresence>{deleteContract && <ConfirmDelete name={`${deleteContract.contact?.name ?? 'customer'} — ${deleteContract.service?.name ?? 'service contract'}`} description="This permanently removes the customer agreement, including its price and contract dates." deleting={deleting} onCancel={() => setDeleteContract(null)} onConfirm={deleteSelectedContract} />}</AnimatePresence>
       </div>
