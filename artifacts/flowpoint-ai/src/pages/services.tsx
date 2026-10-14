@@ -49,6 +49,7 @@ import {
   type ServiceUnitRelationship,
 } from '@/lib/servicesTypes';
 import { ageLabel, requestPriorityLabel, requestStatusLabel, type RequestRecord } from '@/lib/requestsTypes';
+import { useLocation } from 'wouter';
 
 const inputClass =
   'w-full h-[39px] rounded-[9px] border border-[#e4e2de] bg-white px-[11px] text-[13px] text-[#151412] outline-none placeholder:text-[#b3b0aa] focus:border-[#151412] focus:ring-2 focus:ring-[#151412]/8 transition-all';
@@ -950,6 +951,7 @@ function ServiceContractCard({ contract, onEdit, onDelete, editDisabled = false 
 
 export default function ServicesPage() {
   useAuth();
+  const [, navigate] = useLocation();
   const [services, setServices] = useState<Service[]>([]);
   const [categoryDetailsMigrationMissing, setCategoryDetailsMigrationMissing] = useState(false);
   const [contracts, setContracts] = useState<ServiceContract[]>([]);
@@ -967,6 +969,7 @@ export default function ServicesPage() {
   const [formService, setFormService] = useState<Service | null | undefined>(undefined);
   const [formContract, setFormContract] = useState<ServiceContract | null | undefined>(undefined);
   const [formContractServiceId, setFormContractServiceId] = useState<string | null>(null);
+  const [initialContractContactId, setInitialContractContactId] = useState<string | null>(null);
   const [profileService, setProfileService] = useState<Service | null>(null);
   const [deleteService, setDeleteService] = useState<Service | null>(null);
   const [deleteContract, setDeleteContract] = useState<ServiceContract | null>(null);
@@ -1018,6 +1021,16 @@ export default function ServicesPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('addContract') !== '1') return;
+    setInitialContractContactId(params.get('contactId'));
+    setActiveSection('contracts');
+    setFormContractServiceId(null);
+    setFormContract(null);
+    navigate('/services', { replace: true });
+  }, [navigate]);
 
   const saveService = async (draft: ServiceDraft, _selected: { contactIds: string[]; staffIds: string[]; propertyIds: string[]; unitIds: string[] }) => {
     let saved: Service;
@@ -1110,14 +1123,17 @@ export default function ServicesPage() {
     setProfileService(null);
     setActiveSection('contracts');
     setFormContractServiceId(service.id);
+    setInitialContractContactId(null);
     setFormContract(null);
   };
   const closeContractForm = () => {
     setFormContract(undefined);
     setFormContractServiceId(null);
+    setInitialContractContactId(null);
   };
   const openNewContract = () => {
     setFormContractServiceId(null);
+    setInitialContractContactId(null);
     setFormContract(null);
   };
 
@@ -1195,7 +1211,7 @@ export default function ServicesPage() {
           </div>
         </div>
         <AnimatePresence>{formService !== undefined && <ServiceForm service={formService} relationships={EMPTY_RELATIONSHIPS} contacts={contacts} staff={[]} properties={[]} units={[]} onSave={saveService} onClose={() => setFormService(undefined)} />}</AnimatePresence>
-        <AnimatePresence>{formContract !== undefined && <ServiceContractDialog contract={formContract} contacts={contacts} services={services} initialServiceId={formContractServiceId ?? undefined} onSave={saveContract} onClose={closeContractForm} />}</AnimatePresence>
+        <AnimatePresence>{formContract !== undefined && <ServiceContractDialog key={`${formContract?.id ?? 'new'}:${formContractServiceId ?? ''}:${initialContractContactId ?? ''}`} contract={formContract} contacts={contacts} services={services} initialServiceId={formContractServiceId ?? undefined} initialContactId={initialContractContactId ?? undefined} onSave={saveContract} onClose={closeContractForm} />}</AnimatePresence>
         <AnimatePresence>{profileService && <ServiceProfile service={profileService} relationships={EMPTY_RELATIONSHIPS} editDisabled={categoryDetailsMigrationMissing} onClose={() => setProfileService(null)} onEdit={() => { setFormService(profileService); setProfileService(null); }} onAddContract={() => openContractForService(profileService)} onDelete={() => setDeleteService(profileService)} />}</AnimatePresence>
         <AnimatePresence>{deleteService && <ConfirmDelete name={deleteService.name} description="This permanently deletes the catalog offering and its old service links. Any customer contracts must be deleted first." deleting={deleting} onCancel={() => setDeleteService(null)} onConfirm={deleteSelected} />}</AnimatePresence>
         <AnimatePresence>{deleteContract && <ConfirmDelete name={`${deleteContract.contact?.name ?? 'customer'} — ${deleteContract.service?.name ?? 'service contract'}`} description="This permanently removes the customer agreement, including its price and contract dates." deleting={deleting} onCancel={() => setDeleteContract(null)} onConfirm={deleteSelectedContract} />}</AnimatePresence>

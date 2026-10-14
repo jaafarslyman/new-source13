@@ -45,6 +45,7 @@ export default function ServiceContractDialog({
   contacts,
   services,
   initialServiceId,
+  initialContactId,
   onSave,
   onClose,
 }: {
@@ -52,11 +53,12 @@ export default function ServiceContractDialog({
   contacts: Contact[];
   services: Service[];
   initialServiceId?: string;
+  initialContactId?: string;
   onSave: (values: ServiceContractFormValues) => Promise<void>;
   onClose: () => void;
 }) {
-  const [contactSource, setContactSource] = useState<'existing' | 'new'>(contract || contacts.some((item) => item.status !== 'archived') ? 'existing' : 'new');
-  const [contactId, setContactId] = useState(contract ? String(contract.contact_id) : '');
+  const [contactSource, setContactSource] = useState<'existing' | 'new'>(contract || initialContactId || contacts.some((item) => item.status !== 'archived') ? 'existing' : 'new');
+  const [contactId, setContactId] = useState(contract ? String(contract.contact_id) : initialContactId ?? '');
   const [newContact, setNewContact] = useState({ name: '', email: '', phone: '', contact_type: 'other' as ContactType });
   const [serviceId, setServiceId] = useState(contract?.service_id ?? initialServiceId ?? '');
   const [price, setPrice] = useState(contract ? String(contract.price_amount) : '');

@@ -3,7 +3,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertCircle,
   Archive,
+  ArrowUpRight,
   Building2,
+  BriefcaseBusiness,
   CalendarDays,
   Check,
   Clock3,
@@ -373,6 +375,8 @@ function ContactCard({
   serviceRelationships,
   serviceContracts,
   services,
+  openIssueCount,
+  issueCountsAvailable,
   onOpen,
   onEdit,
   onDelete,
@@ -385,6 +389,8 @@ function ContactCard({
   serviceRelationships: ServiceContactRelationship[];
   serviceContracts: ServiceContract[];
   services: Service[];
+  openIssueCount: number;
+  issueCountsAvailable: boolean;
   onOpen: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -395,20 +401,23 @@ function ContactCard({
   const relationshipSummaries = contactRelationshipSummaries(contact, relationships, properties, units);
   const linkedServices = serviceRelationships.filter((item) => String(item.contact_id) === String(contact.id));
   const linkedContracts = serviceContracts.filter((item) => String(item.contact_id) === String(contact.id));
+  const linkedServiceNames = [...new Set([
+    ...linkedContracts.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name),
+    ...linkedServices.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name),
+  ].filter((name): name is string => Boolean(name)))];
   return (
-    <motion.button
+    <motion.article
       layout
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      onClick={onOpen}
-      className="group w-full rounded-[13px] border border-[#e9e6e1] bg-white p-4 text-left transition-all hover:-translate-y-[1px] hover:border-[#d2cec7] hover:shadow-[0_6px_22px_rgba(31,28,23,.06)]"
+      className="group w-full rounded-[13px] border border-[#e9e6e1] bg-white p-4 text-left transition-all hover:border-[#d2cec7] hover:shadow-[0_6px_22px_rgba(31,28,23,.06)]"
     >
       <div className="flex items-start gap-3">
         <Avatar name={contact.name} />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold text-[#171512]">{contact.name}</p>
+               <button type="button" onClick={onOpen} className="truncate text-left text-[13px] font-semibold text-[#171512] hover:underline hover:underline-offset-2">{contact.name}</button>
               <p className="mt-1 text-[10px] font-medium text-[#9a958d]">{contact.customer_id ?? 'Customer ID pending'}</p>
             </div>
             <StatusPill status={contact.status} />
@@ -427,8 +436,8 @@ function ContactCard({
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-[#f0eeeb] pt-3 text-[10px] text-[#aaa59d]">
             <span className="flex items-center gap-1"><MessageSquare size={10} />{contact.last_contacted_at ? `Last contact ${new Date(contact.last_contacted_at).toLocaleDateString()}` : 'No communication yet'}</span>
-            <span>Services: {linkedContracts.length || linkedServices.length ? [...linkedContracts.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? 'Service'), ...linkedServices.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? 'Service')].slice(0, 2).join(', ') : 'none linked'}</span>
-            <span>Open issues: 0</span>
+             <span>Services: {linkedServiceNames.length ? `${linkedServiceNames.slice(0, 2).join(', ')}${linkedServiceNames.length > 2 ? ` +${linkedServiceNames.length - 2}` : ''}` : 'none linked'}</span>
+             <span>Open issues: {issueCountsAvailable ? openIssueCount : 'unavailable'}</span>
             <span>{contact.internal_notes || contact.notes ? 'Has notes' : 'No notes'}</span>
           </div>
         </div>
@@ -438,7 +447,7 @@ function ContactCard({
         <button title="Edit" onClick={onEdit} className="flex h-7 items-center gap-1 rounded-[7px] border border-[#e4e2de] px-2 text-[10px] text-[#77736d] hover:bg-[#f4f2ef]"><Pencil size={11} />Edit</button>
         <button title="Delete" onClick={onDelete} className="flex h-7 items-center gap-1 rounded-[7px] border border-[#f0c8c3] px-2 text-[10px] text-[#a33a30] hover:bg-[#fff7f6]"><Trash2 size={11} />Delete</button>
       </div>
-    </motion.button>
+    </motion.article>
   );
 }
 
@@ -493,17 +502,40 @@ function RelationshipPanel({
   onAdd: (data: Omit<ContactPropertyRelationship, 'id' | 'company_id' | 'property' | 'unit'>) => Promise<void>;
   onRemove: (relationship: ContactPropertyRelationship) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState({ property_id: '', unit_id: '', relationship_type: 'tenant' as RelationshipType, start_date: '', end_date: '', notes: '' });
+  const emptyDraft = { property_id: '', unit_id: '', relationship_type: 'tenant' as RelationshipType, start_date: '', end_date: '', notes: '', ownership_percentage: '', ownership_scope: '' };
+  const [draft, setDraft] = useState(emptyDraft);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const linked = relationships.filter((item) => item.contact_id === contact.id);
   const historical = relationshipHistory.filter((item) => String(item.contact_id) === String(contact.id));
   const propertyUnits = units.filter((unit) => !draft.property_id || unit.property_id === draft.property_id);
+  const selectedProperty = properties.find((item) => item.id === draft.property_id);
   const add = async () => {
     if (!draft.property_id) return;
+    const percentage = draft.ownership_percentage.trim();
+    const parsedPercentage = percentage ? Number(percentage) : null;
+    if (draft.relationship_type === 'owner' && parsedPercentage !== null
+      && (!Number.isFinite(parsedPercentage) || parsedPercentage < 0 || parsedPercentage > 100)) {
+      setSaveError('Ownership share must be between 0 and 100%.');
+      return;
+    }
     setSaving(true);
+    setSaveError('');
     try {
-      await onAdd({ contact_id: contact.id, property_id: draft.property_id, unit_id: draft.unit_id || null, relationship_type: draft.relationship_type, start_date: draft.start_date || null, end_date: draft.end_date || null, notes: draft.notes.trim() || null, ownership_percentage: null, ownership_scope: null });
-      setDraft({ property_id: '', unit_id: '', relationship_type: 'tenant', start_date: '', end_date: '', notes: '' });
+      await onAdd({
+        contact_id: contact.id,
+        property_id: draft.property_id,
+        unit_id: draft.unit_id || null,
+        relationship_type: draft.relationship_type,
+        start_date: draft.start_date || null,
+        end_date: draft.end_date || null,
+        notes: draft.notes.trim() || null,
+        ownership_percentage: draft.relationship_type === 'owner' ? parsedPercentage : null,
+        ownership_scope: draft.relationship_type === 'owner' ? draft.ownership_scope.trim() || null : null,
+      });
+      setDraft(emptyDraft);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Unable to add this relationship.');
     } finally {
       setSaving(false);
     }
@@ -514,11 +546,20 @@ function RelationshipPanel({
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Property"><FlowPointSelect value={draft.property_id} onChange={(value) => setDraft((current) => ({ ...current, property_id: value, unit_id: '' }))} placeholder="Select property" options={properties.map((property) => ({ value: property.id, label: property.name, secondary: [property.city, property.address_line1].filter(Boolean).join(' · ') }))} /></Field>
         <Field label="Unit" hint="optional"><FlowPointSelect value={draft.unit_id} onChange={(value) => setDraft((current) => ({ ...current, unit_id: value }))} placeholder="Select unit" options={propertyUnits.map((unit) => ({ value: unit.id, label: unit.unit_number, secondary: unit.unit_type ?? undefined }))} emptyLabel={draft.property_id ? 'No units for this property' : 'Select a property first'} /></Field>
-        <Field label="Relationship type"><FlowPointSelect value={draft.relationship_type} onChange={(value) => setDraft((current) => ({ ...current, relationship_type: value as RelationshipType }))} placeholder="Select relationship" options={RELATIONSHIP_TYPES.map((item) => ({ ...item }))} /></Field>
+        <Field label="Relationship type"><FlowPointSelect value={draft.relationship_type} onChange={(value) => setDraft((current) => ({ ...current, relationship_type: value as RelationshipType, ownership_percentage: '', ownership_scope: '' }))} placeholder="Select relationship" options={RELATIONSHIP_TYPES.map((item) => ({ ...item }))} /></Field>
+        {draft.relationship_type === 'owner' && <>
+          <Field label="Ownership share" hint="optional"><div className="relative"><input data-testid="input-contact-owner-share" type="number" min="0" max="100" step="0.01" className={`${inputClass} pr-8`} value={draft.ownership_percentage} onChange={(event) => setDraft((current) => ({ ...current, ownership_percentage: event.target.value }))} placeholder="e.g. 50" /><span className="absolute right-3 top-3 text-[10px] text-[#929087]">%</span></div></Field>
+          <Field label={selectedProperty?.property_type === 'apartment_building' ? 'Unit scope' : selectedProperty?.property_type === 'mixed_use_development' ? 'Use scope' : 'Ownership scope'} hint="optional">
+            <input data-testid="input-contact-owner-scope" className={inputClass} value={draft.ownership_scope} onChange={(event) => setDraft((current) => ({ ...current, ownership_scope: event.target.value }))} placeholder={selectedProperty?.property_type === 'apartment_building' ? 'e.g. 1-12' : selectedProperty?.property_type === 'mixed_use_development' ? 'e.g. apartment, office' : 'Optional scope or units'} />
+            {selectedProperty?.property_type === 'apartment_building' && <span className="mt-1 block text-[10px] leading-4 text-[#969188]">For buildings with multiple owners, use unit numbers or ranges and assign every unit to exactly one owner in Properties.</span>}
+            {selectedProperty?.property_type === 'mixed_use_development' && <span className="mt-1 block text-[10px] leading-4 text-[#969188]">Use component keys such as apartment, office, retail_store, restaurant_hospitality, or warehouse.</span>}
+          </Field>
+        </>}
         <Field label="Start date" hint="optional"><input type="date" className={inputClass} value={draft.start_date} onChange={(event) => setDraft((current) => ({ ...current, start_date: event.target.value }))} /></Field>
         <Field label="End date" hint="optional"><input type="date" className={inputClass} value={draft.end_date} onChange={(event) => setDraft((current) => ({ ...current, end_date: event.target.value }))} /></Field>
         <Field label="Notes" hint="optional"><input className={inputClass} value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Lease or ownership context" /></Field>
       </div>
+      {saveError && <div className="mt-3"><InlineError message={saveError} /></div>}
       <button onClick={add} disabled={!draft.property_id || saving} className="mt-3 flex h-9 items-center gap-2 rounded-[9px] bg-[#151412] px-3.5 text-[12px] font-semibold text-white hover:bg-[#312f2c] disabled:opacity-40">{saving ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}Add relationship</button>
     </div>
     {linked.length === 0 && historical.length === 0 ? <EmptyState icon={Home} title="No property relationships yet" description="Connect this person to the properties and units they work with." /> : <div className="space-y-2">{linked.map((relationship) => { const property = relationship.property ?? properties.find((item) => item.id === relationship.property_id); const unit = relationship.unit ?? units.find((item) => item.id === relationship.unit_id); const ownership = relationship.ownership_percentage !== null && relationship.ownership_percentage !== undefined ? `${relationship.ownership_percentage}% ownership` : relationship.ownership_scope; return <div key={String(relationship.id)} className="flex items-start justify-between gap-3 rounded-[11px] border border-[#e9e6e1] bg-white p-3"><div className="flex min-w-0 gap-3"><div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-[9px] bg-[#f1eee9] text-[#706b62]"><Building2 size={15} /></div><div className="min-w-0"><p className="truncate text-[12px] font-semibold text-[#35322e]">{property?.name ?? 'Property unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{unit ? `Unit ${unit.unit_number} · ` : ''}{relationshipTypeLabel(relationship.relationship_type)}</p>{ownership && <p className="mt-1 text-[10px] font-medium text-[#625e57]">{ownership}</p>}{(relationship.start_date || relationship.end_date) && <p className="mt-1 text-[10px] text-[#aaa59d]">{relationship.start_date ?? 'Open'} → {relationship.end_date ?? 'Current'}</p>}</div></div><button onClick={() => onRemove(relationship)} className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-[7px] border border-[#f0c8c3] text-[#a33a30] hover:bg-[#fff7f6]"><Trash2 size={12} /></button></div>; })}</div>}
@@ -564,6 +605,7 @@ function ContactProfile({
   const [savingNotes, setSavingNotes] = useState(false);
   const [issues, setIssues] = useState<RequestRecord[]>([]);
   const [issuesLoading, setIssuesLoading] = useState(false);
+  const [issuesError, setIssuesError] = useState<string | null>(null);
   const tabs = [
     ['overview', 'Overview'],
     ['relationships', 'Relationships'],
@@ -580,9 +622,11 @@ function ContactProfile({
     if (tab !== 'issues') return;
     let active = true;
     setIssuesLoading(true);
+    setIssuesError(null);
     supabase.from('requests').select('*').eq('contact_id', contact.id).order('updated_at', { ascending: false })
       .then(({ data, error }) => {
-        if (active && !error) setIssues((data as RequestRecord[]) ?? []);
+        if (active && error) setIssuesError(error.message);
+        if (active) setIssues(error ? [] : (data as RequestRecord[] | null) ?? []);
         if (active) setIssuesLoading(false);
       });
     return () => { active = false; };
@@ -593,10 +637,16 @@ function ContactProfile({
     <div className="max-h-[calc(92vh-138px)] overflow-y-auto px-5 py-5">
       {tab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Identity</p><Detail label="Contact type" value={contactTypeLabel(contact.contact_type)} /><Detail label="Status" value={contactStatusLabel(contact.status)} /><Detail label="Customer ID" value={contact.customer_id ?? 'Pending'} /><Detail label="Company" value={contact.company_name ?? contact.business_name} /></div><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Communication</p><Detail label="Email" value={contact.email} /><Detail label="Phone" value={contact.phone} /><Detail label="Alternate phone" value={contact.alternate_phone} /><Detail label="Preferred channel" value={channelLabel(contact.preferred_channel)} /></div><div className="rounded-[11px] border border-[#e9e6e1] bg-white p-4 md:col-span-2"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Address and context</p><Detail label="Address" value={[contact.address, contact.city, contact.state, contact.zip_code, contact.country].filter(Boolean).join(', ')} /><Detail label="AI summary" value={contact.ai_summary} /><Detail label="Internal notes" value={contact.internal_notes ?? contact.notes} /></div></div>}
        {tab === 'relationships' && <RelationshipPanel contact={contact} relationships={relationships} relationshipHistory={relationshipHistory} properties={properties} units={units} onAdd={onAddRelationship} onRemove={onRemoveRelationship} />}
-        {tab === 'services' && <ContactServices contact={contact} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} serviceContractError={serviceContractError} services={services} />}
+        {tab === 'services' && <ContactServices contact={contact} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} serviceContractError={serviceContractError} services={services} onAddContract={() => {
+          onClose();
+          navigate(services.some((service) => service.status === 'active')
+            ? `/services?addContract=1&contactId=${encodeURIComponent(String(contact.id))}`
+            : '/services');
+        }} />}
        {tab === 'issues' && <div>
          {issuesLoading && <div className="flex items-center justify-center py-10 text-[11px] text-[#8e8981]"><Loader2 size={14} className="mr-2 animate-spin" />Loading requests…</div>}
-         {!issuesLoading && issues.length === 0 && <EmptyState icon={AlertCircle} title="No requests or issues yet" description="Requests linked to this contact will appear here from the Requests / Issues workspace." />}
+          {!issuesLoading && issuesError && <InlineError message={`Requests for this contact could not be loaded. ${issuesError}`} />}
+          {!issuesLoading && !issuesError && issues.length === 0 && <EmptyState icon={AlertCircle} title="No requests or issues yet" description="Requests linked to this contact will appear here from the Requests / Issues workspace." />}
          {!issuesLoading && issues.length > 0 && <div className="space-y-2">{issues.map((issue) => <button key={issue.id} onClick={() => navigate('/requests')} className="w-full rounded-[11px] border border-[#e9e6e1] bg-white p-3 text-left transition-colors hover:bg-[#fcfbf9]"><div className="flex items-start justify-between gap-3"><p className="truncate text-[12px] font-semibold text-[#35322e]">{issue.title}</p><div className="flex flex-shrink-0 gap-1.5"><span className="rounded-full border border-[#e3dfd9] bg-[#f5f3f0] px-2 py-0.5 text-[10px] font-semibold text-[#77736d]">{requestStatusLabel(issue.status)}</span><span className="rounded-full border border-[#e3dfd9] bg-[#f5f3f0] px-2 py-0.5 text-[10px] font-semibold text-[#77736d]">{requestPriorityLabel(issue.priority)}</span></div></div><p className="mt-1 text-[10px] text-[#9b968d]">Updated {new Date(issue.updated_at).toLocaleDateString()} · {ageLabel(issue.created_at, issue.closed_at)}</p></button>)}</div>}
        </div>}
       {tab === 'communication' && <ConversationHistory contact={contact} />}
@@ -605,19 +655,25 @@ function ContactProfile({
   </Modal>;
 }
 
-function ContactServices({ contact, serviceRelationships, serviceContracts, serviceContractError, services }: { contact: Contact; serviceRelationships: ServiceContactRelationship[]; serviceContracts: ServiceContract[]; serviceContractError: string | null; services: Service[] }) {
+function ContactServices({ contact, serviceRelationships, serviceContracts, serviceContractError, services, onAddContract }: { contact: Contact; serviceRelationships: ServiceContactRelationship[]; serviceContracts: ServiceContract[]; serviceContractError: string | null; services: Service[]; onAddContract: () => void }) {
   const linked = serviceRelationships.filter((item) => String(item.contact_id) === String(contact.id));
   const contracts = serviceContracts.filter((item) => String(item.contact_id) === String(contact.id));
-  if (!linked.length && !contracts.length) return serviceContractError
-    ? <div className="space-y-3"><InlineError message={`Service contracts are unavailable until supabase/service-contracts-migration.sql is applied. ${serviceContractError}`} /><EmptyState icon={BriefcaseIcon} title="No service contracts yet" description="Create a contract for this contact from the Services page." /></div>
-    : <EmptyState icon={BriefcaseIcon} title="No service contracts yet" description="Create a contract for this contact from the Services page." />;
-  return <div className="space-y-2">
+  const hasActiveServices = services.some((service) => service.status === 'active');
+  return <div className="space-y-3">
+    {serviceContractError && <InlineError message={`Service contracts are unavailable until supabase/service-contracts-migration.sql is applied or the query issue is resolved. ${serviceContractError}`} />}
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[11px] border border-[#e9e6e1] bg-white p-3">
+      <div><p className="text-[12px] font-semibold text-[#35322e]">Service contracts</p><p className="mt-1 text-[10px] text-[#8e8981]">Agreements between this contact and your company.</p></div>
+      <button type="button" onClick={onAddContract} disabled={Boolean(serviceContractError) || contact.status === 'archived'} title={contact.status === 'archived' ? 'Archived contacts cannot receive new contracts' : serviceContractError ? 'Resolve the service contract database issue first' : undefined} className="flex h-8 items-center gap-1.5 rounded-[8px] border border-[#e4e2de] px-2.5 text-[10px] font-semibold text-[#625e57] hover:bg-[#f0eeea] disabled:cursor-not-allowed disabled:opacity-40">{hasActiveServices ? 'Add service contract' : 'Set up a service'}<ArrowUpRight size={12} /></button>
+    </div>
+    {!serviceContractError && !linked.length && !contracts.length && <EmptyState icon={BriefcaseIcon} title="No service contracts yet" description="Create a contract to record which service this contact is receiving and the agreed terms." />}
+    {contracts.length > 0 && <p className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-[.08em] text-[#9b968d]">Customer agreements</p>}
     {contracts.map((contract) => {
       const service = contract.service ?? services.find((item) => item.id === contract.service_id);
       const amount = Number(contract.price_amount);
       const price = `${contract.currency_code} ${Number.isFinite(amount) ? amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : contract.price_amount}`;
       return <div key={`contract-${contract.id}`} className="rounded-[11px] border border-[#e9e6e1] bg-white p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-[12px] font-semibold text-[#35322e]">{service?.name ?? 'Service unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{service?.category ?? 'Category unavailable'} · {price} / {serviceBillingPeriodLabel(contract.billing_period)}</p></div><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${contract.status === 'active' ? 'border-[#d2ead7] bg-[#f2faf3] text-[#327443]' : 'border-[#e1dfda] bg-[#f1f0ee] text-[#77736d]'}`}>{serviceContractStatusLabel(contract.status)}</span></div><p className="mt-2 text-[10px] text-[#8e8981]">{contract.start_date || 'Start date unavailable'} → {contract.end_date || 'Ongoing'}</p>{contract.notes && <p className="mt-2 text-[11px] leading-[1.5] text-[#77736d]">{contract.notes}</p>}</div>;
     })}
+    {linked.length > 0 && <p className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-[.08em] text-[#9b968d]">Other service associations</p>}
     {linked.map((relationship) => {
     const service = relationship.service ?? services.find((item) => item.id === relationship.service_id);
     return <div key={String(relationship.id)} className="rounded-[11px] border border-[#e9e6e1] bg-white p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-[12px] font-semibold text-[#35322e]">{service?.name ?? 'Service unavailable'}</p><p className="mt-1 text-[10px] text-[#8e8981]">{service?.category ?? 'Category unavailable'}</p></div><span className="rounded-full border border-[#d2ead7] bg-[#f2faf3] px-2 py-0.5 text-[10px] font-semibold text-[#327443]">{relationship.relationship_status ?? 'Active'}</span></div>{relationship.notes && <p className="mt-2 text-[11px] leading-[1.5] text-[#77736d]">{relationship.notes}</p>}</div>;
@@ -633,12 +689,14 @@ function Detail({ label, value }: { label: string; value: string | null | undefi
 }
 
 function ConfirmDelete({ name, deleting, onCancel, onConfirm }: { name: string; deleting: boolean; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="fixed inset-0 z-[70] flex items-center justify-center p-4"><motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={deleting ? undefined : onCancel} className="absolute inset-0 bg-[#171511]/30 backdrop-blur-[2px]" /><motion.div initial={{ opacity: 0, y: 8, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="relative w-full max-w-[380px] rounded-[16px] border border-[#e4e2de] bg-[#fbfaf8] p-6 text-center shadow-[0_24px_80px_rgba(25,22,18,.18)]"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#f0cbc6] bg-[#fff3f1] text-[#b33d32]"><Trash2 size={17} /></div><h2 className="mt-4 text-[15px] font-semibold text-[#24211e]">Delete {name}?</h2><p className="mt-1 text-[12px] leading-[1.5] text-[#8f8980]">This removes the contact and its property relationships. Existing service contracts must be deleted first.</p><div className="mt-5 flex gap-2"><button onClick={onCancel} disabled={deleting} className="h-9 flex-1 rounded-[9px] border border-[#e4e2de] text-[12px] font-medium text-[#625e57] hover:bg-[#f0eeea] disabled:opacity-50">Cancel</button><button onClick={onConfirm} disabled={deleting} className="flex h-9 flex-1 items-center justify-center gap-2 rounded-[9px] bg-[#b33d32] text-[12px] font-semibold text-white hover:bg-[#96342b] disabled:opacity-50">{deleting && <Loader2 size={13} className="animate-spin" />}Delete</button></div></motion.div></div>;
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center p-4"><motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={deleting ? undefined : onCancel} className="absolute inset-0 bg-[#171511]/30 backdrop-blur-[2px]" /><motion.div initial={{ opacity: 0, y: 8, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="relative w-full max-w-[380px] rounded-[16px] border border-[#e4e2de] bg-[#fbfaf8] p-6 text-center shadow-[0_24px_80px_rgba(25,22,18,.18)]"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#f0cbc6] bg-[#fff3f1] text-[#b33d32]"><Trash2 size={17} /></div><h2 className="mt-4 text-[15px] font-semibold text-[#24211e]">Delete {name}?</h2><p className="mt-1 text-[12px] leading-[1.5] text-[#8f8980]">This removes the contact and its property relationship records. Deletion is blocked while service contracts reference this contact. To keep contract and relationship history, cancel and set the contact status to Archived instead.</p><div className="mt-5 flex gap-2"><button onClick={onCancel} disabled={deleting} className="h-9 flex-1 rounded-[9px] border border-[#e4e2de] text-[12px] font-medium text-[#625e57] hover:bg-[#f0eeea] disabled:opacity-50">Cancel</button><button onClick={onConfirm} disabled={deleting} className="flex h-9 flex-1 items-center justify-center gap-2 rounded-[9px] bg-[#b33d32] text-[12px] font-semibold text-white hover:bg-[#96342b] disabled:opacity-50">{deleting && <Loader2 size={13} className="animate-spin" />}Delete</button></div></motion.div></div>;
 }
 
 export default function ContactsPage() {
   useAuth();
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [requestSummaries, setRequestSummaries] = useState<Pick<RequestRecord, 'contact_id' | 'status'>[]>([]);
+  const [requestLoadError, setRequestLoadError] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<ContactPropertyRelationship[]>([]);
   const [relationshipHistory, setRelationshipHistory] = useState<ContactPropertyRelationshipHistory[]>([]);
   const [services, setServices] = useState<Service[]>([]);
@@ -669,7 +727,7 @@ export default function ContactsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [contactsResult, relationshipsResult, historyResult, propertiesResult, unitsResult, servicesResult, serviceRelationshipsResult, serviceContractsResult] = await Promise.all([
+    const [contactsResult, relationshipsResult, historyResult, propertiesResult, unitsResult, servicesResult, serviceRelationshipsResult, serviceContractsResult, requestsResult] = await Promise.all([
       supabase.from('contacts').select('*').order('name'),
       supabase.from('contact_property_relationships').select('id, company_id, contact_id, property_id, unit_id, relationship_type, start_date, end_date, notes, ownership_percentage, ownership_scope, property:properties(id, name, address_line1, city), unit:units(id, unit_number, property_id)'),
       supabase.from('contact_property_relationship_history').select('*').order('archived_at', { ascending: false }),
@@ -678,6 +736,7 @@ export default function ContactsPage() {
       supabase.from('services').select('*').order('name'),
       supabase.from('contact_services').select('id, company_id, service_id, contact_id, relationship_status, notes, service:services(id, name, category, status)'),
       supabase.from('service_contracts').select('*, service:services(id, name, category, status)').order('created_at', { ascending: false }),
+      supabase.from('requests').select('contact_id, status').not('contact_id', 'is', null),
     ]);
     if (contactsResult.error) setError(contactsResult.error.message);
     else setContacts((contactsResult.data as Contact[]) ?? []);
@@ -709,6 +768,14 @@ export default function ContactsPage() {
     } else {
       setServiceContracts((serviceContractsResult.data as unknown as ServiceContract[]) ?? []);
       setServiceContractError(null);
+    }
+    if (requestsResult.error) {
+      setRequestSummaries([]);
+      setRequestLoadError(requestsResult.error.message);
+      setIssuesFilter('');
+    } else {
+      setRequestSummaries((requestsResult.data as Pick<RequestRecord, 'contact_id' | 'status'>[]) ?? []);
+      setRequestLoadError(null);
     }
     setLoading(false);
   }, []);
@@ -789,19 +856,20 @@ export default function ContactsPage() {
           ...linkedContracts.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? ''),
           ...linkedServices.map((item) => item.service?.name ?? services.find((service) => service.id === item.service_id)?.name ?? ''),
         ].join(' ');
-       const haystack = [contact.name, contact.email, contact.phone, contact.customer_id, contact.company_name, contact.business_name, linkedPropertyNames, linkedUnitNumbers, linkedServiceNames].filter(Boolean).join(' ').toLowerCase();
+        const haystack = [contact.name, contact.email, contact.phone, contact.alternate_phone, contact.customer_id, contact.company_name, contact.business_name, contact.address, contact.city, contact.state, contact.zip_code, contact.country, linkedPropertyNames, linkedUnitNumbers, linkedServiceNames].filter(Boolean).join(' ').toLowerCase();
       const lastContact = contact.last_contacted_at ? new Date(contact.last_contacted_at).getTime() : null;
       const matchesLastContact = !lastContactFilter || (lastContactFilter === 'never' ? !lastContact : lastContactFilter === 'older' ? Boolean(lastContact && now - lastContact > 30 * 86400000) : Boolean(lastContact && now - lastContact <= Number(lastContactFilter) * 86400000));
+       const openIssueCount = requestSummaries.filter((request) => String(request.contact_id) === String(contact.id) && !['resolved', 'closed', 'cancelled'].includes(request.status)).length;
       return (!needle || haystack.includes(needle)) &&
         (!typeFilter || contact.contact_type === typeFilter) &&
         (!statusFilter || contact.status === statusFilter) &&
         (!propertyFilter || linkedPropertyIds.includes(propertyFilter)) &&
         (!unitFilter || linkedUnitIds.includes(unitFilter)) &&
-          (!serviceFilter || (serviceFilter === 'none' ? linkedServices.length === 0 && linkedContracts.length === 0 : linkedServices.some((item) => item.service_id === serviceFilter) || linkedContracts.some((item) => item.service_id === serviceFilter))) &&
-        (!issuesFilter || issuesFilter === 'none') &&
+           (!serviceFilter || (serviceFilter === 'none' ? linkedServices.length === 0 && linkedContracts.length === 0 : linkedServices.some((item) => item.service_id === serviceFilter) || linkedContracts.some((item) => item.service_id === serviceFilter))) &&
+         (!issuesFilter || (issuesFilter === 'none' ? openIssueCount === 0 : openIssueCount > 0)) &&
         matchesLastContact;
     }).sort((a, b) => a.name.localeCompare(b.name));
-  }, [contacts, relationships, properties, units, services, serviceRelationships, serviceContracts, search, typeFilter, statusFilter, propertyFilter, unitFilter, serviceFilter, lastContactFilter, issuesFilter]);
+  }, [contacts, relationships, properties, units, services, serviceRelationships, serviceContracts, requestSummaries, search, typeFilter, statusFilter, propertyFilter, unitFilter, serviceFilter, lastContactFilter, issuesFilter]);
 
   const clearFilters = () => { setSearch(''); setTypeFilter(''); setStatusFilter(''); setPropertyFilter(''); setUnitFilter(''); setServiceFilter(''); setLastContactFilter(''); setIssuesFilter(''); };
 
@@ -809,7 +877,8 @@ export default function ContactsPage() {
     <header className="flex flex-shrink-0 items-center justify-between border-b border-[#e9e6e1] bg-[#fbfaf8] px-5 py-4 sm:px-8"><div><p className="text-[10px] font-semibold uppercase tracking-[.1em] text-[#a19c93]">People and relationships</p><h1 className="mt-1 text-[20px] font-semibold tracking-[-.02em] text-[#151412]">Contacts</h1><p className="mt-1 max-w-[720px] text-[12px] text-[#77736d]">Manage the people your company communicates with and the properties, units, services, requests, and conversations connected to them.</p></div><div className="flex items-center gap-2"><NotificationBell /><button onClick={() => setFormContact(null)} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#151412] px-3.5 text-[12px] font-semibold text-white shadow-[0_2px_5px_rgba(0,0,0,.12)] hover:bg-[#312f2c]"><Plus size={14} />Add contact</button></div></header>
     <div className="min-h-0 flex-1 overflow-y-auto"><div className="mx-auto max-w-[1440px] px-5 py-6 sm:px-8 sm:py-8">
       {feedback && <div className={`mb-5 flex items-center justify-between rounded-[10px] border px-3 py-2.5 text-[12px] ${feedback.tone === 'success' ? 'border-[#d2ead7] bg-[#f2faf3] text-[#327443]' : 'border-[#f0c8c3] bg-[#fff7f6] text-[#a33a30]'}`}><span className="flex items-center gap-2">{feedback.tone === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}{feedback.message}</span><button onClick={() => setFeedback(null)}><X size={14} /></button></div>}
-       {(relationshipError || serviceError) && <div className="mb-5 flex items-start gap-2 rounded-[10px] border border-[#f1dfb8] bg-[#fffaf0] px-3 py-2.5 text-[11px] text-[#8d671b]"><AlertCircle size={13} className="mt-0.5 flex-shrink-0" /><span>Some relationship data needs the supplied Supabase migration before it can be loaded. {relationshipError ?? serviceError}</span></div>}
+        {(relationshipError || serviceError) && <div className="mb-5 flex items-start gap-2 rounded-[10px] border border-[#f1dfb8] bg-[#fffaf0] px-3 py-2.5 text-[11px] text-[#8d671b]"><AlertCircle size={13} className="mt-0.5 flex-shrink-0" /><span>Some relationship data needs the supplied Supabase migration before it can be loaded. {relationshipError ?? serviceError}</span></div>}
+        {requestLoadError && <div className="mb-5"><InlineError message={`Open issue counts and issue filters are unavailable. Apply supabase/requests-issues-migration.sql if the requests table is missing. ${requestLoadError}`} /></div>}
        <div className="rounded-[13px] border border-[#e9e6e1] bg-white p-3.5">
          <div className="flex items-center gap-2">
            <label className="relative min-w-0 flex-1"><Search size={12} className="pointer-events-none absolute left-[10px] top-1/2 -translate-y-1/2 text-[#aaa59d]" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, email, company, property, or unit" className="h-[30px] w-full rounded-[8px] border border-[#e5e2dd] bg-[#faf9f7] pl-7 pr-7 text-[12px] text-[#151412] outline-none placeholder:text-[#b3b0aa] focus:border-[#cfcac2] focus:bg-white" />{search && <button type="button" onClick={() => setSearch('')} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 text-[#aaa59d] hover:text-[#151412]"><X size={11} /></button>}</label>
@@ -820,7 +889,7 @@ export default function ContactsPage() {
              <FlowPointSelect value={unitFilter} onChange={setUnitFilter} placeholder="All units" options={units.map((unit) => ({ value: unit.id, label: unit.unit_number, secondary: properties.find((property) => property.id === unit.property_id)?.name }))} />
              <FlowPointSelect value={serviceFilter} onChange={setServiceFilter} placeholder="All services" options={[{ value: 'none', label: 'No services linked' }, ...services.map((service) => ({ value: service.id, label: service.name, secondary: service.category }))]} />
              <FlowPointSelect value={lastContactFilter} onChange={setLastContactFilter} placeholder="Last communication" options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: 'older', label: 'Older than 30 days' }, { value: 'never', label: 'Never contacted' }]} />
-             <FlowPointSelect value={issuesFilter} onChange={setIssuesFilter} placeholder="Open issues" options={[{ value: 'none', label: 'No open issues' }]} />
+              <FlowPointSelect value={issuesFilter} onChange={setIssuesFilter} placeholder={requestLoadError ? 'Issues unavailable' : 'Open issues'} options={requestLoadError ? [] : [{ value: 'has', label: 'Has open issues' }, { value: 'none', label: 'No open issues' }]} emptyLabel={requestLoadError ? 'Apply the requests migration first' : 'No issue filters'} />
            </PageFilterMenu>
            <button type="button" onClick={loadData} disabled={loading} aria-label="Refresh contacts" className="flex h-[30px] w-[30px] items-center justify-center rounded-full border border-[#e5e2dd] bg-[#faf9f7] text-[#89847c] hover:border-[#cfcac2] hover:text-[#151412] disabled:opacity-50"><RefreshCw size={13} className={loading ? 'animate-spin' : ''} /></button>
          </div>
@@ -828,7 +897,10 @@ export default function ContactsPage() {
       {loading && <LoadingState />}
       {!loading && error && <div className="mt-5"><InlineError message={error} /></div>}
        {!loading && !error && filtered.length === 0 && <div className="mt-5"><EmptyState icon={Users2} title={search || typeFilter || statusFilter || propertyFilter || unitFilter || serviceFilter || lastContactFilter || issuesFilter ? 'No matching contacts' : 'No contacts yet'} description={search || typeFilter || statusFilter || propertyFilter || unitFilter || serviceFilter || lastContactFilter || issuesFilter ? 'Try a different search or reset the filters.' : 'Add the first contact to give your team a shared identity and relationship record.'} /></div>}
-         {!loading && !error && filtered.length > 0 && <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"><AnimatePresence mode="popLayout">{filtered.map((contact) => <ContactCard key={contact.id} contact={contact} relationships={relationships} properties={properties} units={units} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} services={services} onOpen={() => setProfileContact(contact)} onEdit={() => setFormContact(contact)} onDelete={() => setDeleteContact(contact)} onNotes={() => setNotesContact(contact)} />)}</AnimatePresence></div>}
+          {!loading && !error && filtered.length > 0 && <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"><AnimatePresence mode="popLayout">{filtered.map((contact) => {
+            const openIssueCount = requestSummaries.filter((request) => String(request.contact_id) === String(contact.id) && !['resolved', 'closed', 'cancelled'].includes(request.status)).length;
+            return <ContactCard key={contact.id} contact={contact} relationships={relationships} properties={properties} units={units} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} services={services} openIssueCount={openIssueCount} issueCountsAvailable={!requestLoadError} onOpen={() => setProfileContact(contact)} onEdit={() => setFormContact(contact)} onDelete={() => setDeleteContact(contact)} onNotes={() => setNotesContact(contact)} />;
+          })}</AnimatePresence></div>}
     </div></div>
     <AnimatePresence>{formContact !== undefined && <ContactForm contact={formContact} onSave={saveContact} onClose={() => setFormContact(undefined)} />}</AnimatePresence>
       <AnimatePresence>{profileContact && <ContactProfile contact={profileContact} relationships={relationships} relationshipHistory={relationshipHistory} properties={properties} units={units} serviceRelationships={serviceRelationships} serviceContracts={serviceContracts} serviceContractError={serviceContractError} services={services} onClose={() => setProfileContact(null)} onEdit={() => setFormContact(profileContact)} onAddRelationship={addRelationship} onRemoveRelationship={removeRelationship} onSaveNotes={(notes) => saveNotes(profileContact, notes)} />}</AnimatePresence>
