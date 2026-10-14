@@ -635,7 +635,7 @@ function GuidedServiceForm({
     set('category_details', { ...categoryDetails, [key]: value } as ServiceCategoryDetails);
   };
   const contactOptions = contacts.filter((item) => !contactIds.includes(String(item.id)));
-  const staffOptions = staff.filter((item) => !staffIds.includes(String(item.id)));
+  const staffOptions = staff.filter((item) => item.status !== 'inactive' && !staffIds.includes(String(item.id)));
   const propertyOptions = properties.filter((item) => !propertyIds.includes(item.id));
   const unitOptions = units.filter((item) => !unitIds.includes(item.id));
   const requestClose = () => {

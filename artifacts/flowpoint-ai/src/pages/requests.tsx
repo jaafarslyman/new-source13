@@ -146,7 +146,7 @@ function RequestForm({
         <Field label="Property" hint="optional"><FlowPointSelect value={draft.property_id} onChange={(value) => set({ property_id: value, unit_id: '' })} placeholder="Select property" options={properties.map((property) => ({ value: property.id, label: property.name, secondary: [property.city, property.address_line1].filter(Boolean).join(' · ') }))} /></Field>
         <Field label="Unit" hint="optional"><FlowPointSelect disabled={!draft.property_id} value={draft.unit_id} onChange={(value) => set({ unit_id: value })} placeholder={draft.property_id ? 'Select unit' : 'Select property first'} options={propertyUnits.map((unit) => ({ value: unit.id, label: `Unit ${unit.unit_number}`, secondary: unit.unit_type ?? undefined }))} emptyLabel="No units for this property" /></Field>
         <Field label="Related service" hint="optional"><FlowPointSelect value={draft.service_id} onChange={(value) => set({ service_id: value })} placeholder="Select service" options={services.map((service) => ({ value: service.id, label: service.name, secondary: service.category }))} /></Field>
-        <Field label="Assigned staff" hint="optional"><FlowPointSelect value={draft.assigned_staff_id} onChange={(value) => set({ assigned_staff_id: value })} placeholder="Leave unassigned" options={staff.map((member) => ({ value: String(member.id), label: member.name, secondary: [member.role, member.department].filter(Boolean).join(' · ') }))} /></Field>
+        <Field label="Assigned staff" hint="optional"><FlowPointSelect value={draft.assigned_staff_id} onChange={(value) => set({ assigned_staff_id: value })} placeholder="Leave unassigned" options={staff.filter((member) => member.status !== 'inactive' || String(member.id) === draft.assigned_staff_id).map((member) => ({ value: String(member.id), label: member.name, secondary: [member.role, member.department, member.status === 'inactive' ? 'Inactive · currently assigned' : ''].filter(Boolean).join(' · ') }))} /></Field>
         {draft.contact_id && <div className="flex items-center rounded-[9px] bg-[#f5f3f0] px-3 text-[11px] text-[#77736d]">Customer ID: <span className="ml-1 font-semibold text-[#4d4942]">{contacts.find((contact) => String(contact.id) === draft.contact_id)?.customer_id ?? 'Not provided'}</span></div>}
       </div></div>
       <div className="mt-6 border-t border-[#ebe8e3] pt-5"><p className="mb-3 text-[12px] font-semibold text-[#35322e]">Additional information</p><div className="grid gap-4 md:grid-cols-2">
@@ -227,6 +227,11 @@ export default function RequestsPage() {
   const [profileRequest, setProfileRequest] = useState<RequestRecord | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<RequestRecord | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    const staffId = new URLSearchParams(window.location.search).get('staffId');
+    if (staffId) setStaffFilter(staffId);
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true); setError(null);
